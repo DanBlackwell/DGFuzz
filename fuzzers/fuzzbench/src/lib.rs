@@ -20,7 +20,7 @@ use libafl::{
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or,
-    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, cfg_prescience::ControlFlowGraph},
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
@@ -29,7 +29,7 @@ use libafl::{
         StdMOptMutator, StdScheduledMutator, Tokens,
     },
     observers::{HitcountsMapObserver, TimeObserver},
-    prelude::{forkserver::ControlFlowGraph, probabilistic_sampling::UncoveredNeighboursProbabilitySamplingScheduler},
+    prelude::probabilistic_sampling::UncoveredNeighboursProbabilitySamplingScheduler,
     schedulers::{
         powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
     },
