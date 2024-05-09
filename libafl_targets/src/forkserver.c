@@ -59,6 +59,7 @@
 int __afl_sharedmem_fuzzing __attribute__((weak));
 
 extern uint8_t *__afl_area_ptr;
+extern uint8_t *__afl_neighbours_map_ptr;
 extern size_t   __afl_map_size;
 extern uint8_t *__token_start;
 extern uint8_t *__token_stop;
@@ -104,6 +105,7 @@ static void at_exit(int signal) {
 /* SHM fuzzing setup. */
 
 void __afl_map_shm(void) {
+  fprintf(stderr, "initialising shmem\n");
   if (already_initialized_shm) return;
   already_initialized_shm = 1;
 
@@ -124,7 +126,7 @@ void __afl_map_shm(void) {
     }
 
     shm_base =
-        mmap(0, __afl_map_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        mmap(0, 2 * __afl_map_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
 
     close(shm_fd);
     shm_fd = -1;
@@ -137,9 +139,17 @@ void __afl_map_shm(void) {
     }
 
     __afl_area_ptr = shm_base;
+    __afl_neighbours_map_ptr = shm_base + __afl_map_size;
+    fprintf(stderr,
+            "using mmap: set __afl_area_ptr: %p, __afl_neighbours_map_ptr: %p\n", __afl_area_ptr, __afl_neighbours_map_ptr);
+
 #else
     uint32_t shm_id = atoi(id_str);
     __afl_area_ptr = (uint8_t *)shmat(shm_id, NULL, 0);
+    __afl_neighbours_map_ptr = __afl_area_ptr + __afl_map_size;
+
+    fprintf(stderr,
+            "using shmat: set __afl_area_ptr: %p, __afl_neighbours_map_ptr: %p\n", __afl_area_ptr, __afl_neighbours_map_ptr);
 
     /* Whooooops. */
 

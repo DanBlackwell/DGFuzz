@@ -21,6 +21,9 @@ pub use new_hash_feedback::NewHashFeedback;
 #[cfg(feature = "std")]
 pub use new_hash_feedback::NewHashFeedbackMetadata;
 
+#[cfg(feature = "std")]
+pub mod cfg_prescience;
+
 #[cfg(feature = "nautilus")]
 pub mod nautilus;
 use alloc::string::{String, ToString};

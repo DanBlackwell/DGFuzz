@@ -408,6 +408,7 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         "autotokens-pass.cc",
         "coverage-accounting-pass.cc",
         "cmplog-instructions-pass.cc",
+        "SanitizerCoverage.cpp"
     ] {
         build_pass(
             bindir_path,

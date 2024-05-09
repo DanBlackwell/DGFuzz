@@ -434,6 +434,24 @@ bool AFLCoverage::runOnModule(Module &M) {
   int inst_blocks = 0;
   // scanForDangerousFunctions(&M);
 
+  // Pre-populate the random values for each basic-block 
+  for (auto &F : M) {
+    if (Debug)
+      fprintf(stderr, "FUNCTION: %s (%zu)\n", F.getName().str().c_str(), F.size());
+    if (F.size() < function_minimum_size) { continue; }
+    if (DumpCFG) { entry_bb[F.getName()] = &F.getEntryBlock(); }
+
+    for (auto &BB : F) {
+      cur_loc = RandBelow(map_size);
+      bb_to_cur_loc[&BB] = cur_loc;
+      if (Debug)
+        fprintf(stderr, "  Set bb_to_cur_loc[%p] = %u\n", &BB, cur_loc);
+    }
+  }
+  if (Debug)
+    fprintf(stderr, "==========DONE ASSIGNING RANDOMS===========\n");
+
+  // Ok, now we'll actually add the instrumentation
   for (auto &F : M) {
     int has_calls = 0;
     if (Debug)
@@ -449,6 +467,79 @@ bool AFLCoverage::runOnModule(Module &M) {
     for (auto &BB : F) {
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
       IRBuilder<>          IRB(&(*IP));
+
+      // fetch cur_loc from our pre-populated map
+      auto iter = bb_to_cur_loc.find(&BB);
+      if (Debug)
+        fprintf(stderr, "Looking up bb_to_cur_loc[%p]\n", &BB);
+      assert(iter != bb_to_cur_loc.end());
+      cur_loc = iter->second;
+
+      ConstantInt *CurLoc;
+#ifdef HAVE_VECTOR_INTRINSICS
+      if (Ngram)
+        CurLoc = ConstantInt::get(IntLocTy, cur_loc);
+      else
+#endif
+        CurLoc = ConstantInt::get(Int32Ty, cur_loc);
+
+      // Set any successor blocks to 255 (if not yet covered)
+      if (1) { // (!instrument_ctx) {
+        for (succ_iterator SI = succ_begin(&BB), E = succ_end(&BB); SI != E; ++SI) {
+          BasicBlock *SuccBB = *SI;
+          if (Debug)
+            fprintf(stderr, " succ: %p\n", SuccBB);
+          // SuccBB is a successor of BB
+
+          auto iter = bb_to_cur_loc.find(SuccBB);
+          assert(iter != bb_to_cur_loc.end());
+          auto next_loc = iter->second;
+
+          LoadInst *MapPtr = IRB.CreateLoad(
+#if LLVM_VERSION_MAJOR >= 14
+              PointerType::get(Int8Ty, 0),
+#endif
+              AFLMapPtr);
+
+          ConstantInt *Combined;
+#ifdef HAVE_VECTOR_INTRINSICS
+          if (Ngram)
+            Combined = ConstantInt::get(IntLocTy, (cur_loc >> 1) ^ next_loc);
+          else
+#endif
+            Combined = ConstantInt::get(Int32Ty, (cur_loc >> 1) ^ next_loc);
+
+          Value *MapPtrIdx = IRB.CreateGEP(
+#if LLVM_VERSION_MAJOR >= 14
+            Int8Ty,
+#endif
+            MapPtr, 
+            Combined
+          );
+
+          Value *Counter = IRB.CreateLoad(
+#if LLVM_VERSION_MAJOR >= 14
+            IRB.getInt8Ty(),
+#endif
+            MapPtrIdx
+          );
+
+          // Compare counter to 0
+          Value *IsZero = IRB.CreateICmpEQ(Counter, IRB.getInt8(0), "isZero");
+
+          // Use 'select' to choose between 255 and existing value
+          Value *NewCounterVal = IRB.CreateSelect(IsZero, 
+                                                  IRB.getInt8(255), 
+                                                  Counter,
+                                                  "newCounter");
+
+          // Store the result back into the counter
+          IRB.CreateStore(NewCounterVal, MapPtrIdx)
+              ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
+          if (Debug)
+            fprintf(stderr, "Added instructions\n");
+        }
+      }
 
       // Context sensitive coverage
       if (instrument_ctx && &BB == &F.getEntryBlock()) {
@@ -528,11 +619,6 @@ bool AFLCoverage::runOnModule(Module &M) {
 
       if (RandBelow(100) >= InstRatio) { continue; }
 
-      /* Make up cur_loc */
-
-      // cur_loc++;
-      cur_loc = RandBelow(map_size);
-      if (DumpCFG) { bb_to_cur_loc[&BB] = cur_loc; }
 /* There is a problem with Ubuntu 18.04 and llvm 6.0 (see issue #63).
    The inline function successors() is not inlined and also not found at runtime
    :-( As I am unable to detect Ubuntu18.04 heree, the next best thing is to
@@ -591,14 +677,6 @@ bool AFLCoverage::runOnModule(Module &M) {
 
 #endif
 
-      ConstantInt *CurLoc;
-
-#ifdef HAVE_VECTOR_INTRINSICS
-      if (Ngram)
-        CurLoc = ConstantInt::get(IntLocTy, cur_loc);
-      else
-#endif
-        CurLoc = ConstantInt::get(Int32Ty, cur_loc);
 
       /* Load prev_loc */
 
@@ -704,34 +782,16 @@ bool AFLCoverage::runOnModule(Module &M) {
             MapPtrIdx);
         Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
-        Value *Incr = IRB.CreateAdd(Counter, One);
+        // Check if 'counter' is greater than or equal to 254
+        Value *IsGTE254 = IRB.CreateICmpUGE(Counter, IRB.getInt8(254), "isGTE254");
 
-#if LLVM_VERSION_MAJOR < 9
-        if (neverZero_counters_str !=
-            NULL) {  // with llvm 9 we make this the default as the bug in llvm
-                     // is then fixed
-#else
-        if (NotZero) {
+        // Prepare the value for 'counter + 1', taking into account wrapping
+        Value *CounterPlusOne = IRB.CreateAdd(Counter, IRB.getInt8(1), "counterPlusOne", false, true);
 
-#endif
-          /* hexcoder: Realize a counter that skips zero during overflow.
-           * Once this counter reaches its maximum value, it next increments to
-           * 1
-           *
-           * Instead of
-           * Counter + 1 -> Counter
-           * we inject now this
-           * Counter + 1 -> {Counter, OverflowFlag}
-           * Counter + OverflowFlag -> Counter
-           */
+        // Select 1 if 'counter' is greater than or equal to 254, otherwise 'counter + 1'
+        Value *FinalCounterVal = IRB.CreateSelect(IsGTE254, IRB.getInt8(1), CounterPlusOne, "finalCounterVal");
 
-          ConstantInt *Zero = ConstantInt::get(Int8Ty, 0);
-          auto         cf = IRB.CreateICmpEQ(Incr, Zero);
-          auto         carry = IRB.CreateZExt(cf, Int8Ty);
-          Incr = IRB.CreateAdd(Incr, carry);
-        }
-
-        IRB.CreateStore(Incr, MapPtrIdx)
+        IRB.CreateStore(FinalCounterVal, MapPtrIdx)
             ->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
 
       } /* non atomic case */

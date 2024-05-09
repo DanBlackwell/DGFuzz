@@ -1,5 +1,6 @@
 //! Map feedback, maximizing or minimizing maps, for example the afl-style map observer.
 
+use hashbrown::HashSet;
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -12,19 +13,21 @@ use core::{
     ops::{BitAnd, BitOr},
 };
 
+
+
 use libafl_bolts::{AsIter, AsMutSlice, AsSlice, HasRefCnt, Named};
 use num_traits::PrimInt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    corpus::Testcase,
+    corpus::{Testcase, CorpusId},
     events::{Event, EventFirer},
     executors::ExitKind,
-    feedbacks::{Feedback, HasObserverName},
+    feedbacks::{Feedback, HasObserverName, cfg_prescience::ControlFlowGraph},
     inputs::UsesInput,
     monitors::{AggregatorOps, UserStats, UserStatsValue},
     observers::{MapObserver, Observer, ObserversTuple, UsesObserver},
-    state::{HasMetadata, HasNamedMetadata, State},
+    state::{HasMetadata, HasNamedMetadata, State, HasCorpus},
     Error,
 };
 
@@ -34,6 +37,8 @@ pub const MAPFEEDBACK_PREFIX: &str = "mapfeedback_metadata_";
 /// A [`MapFeedback`] that implements the AFL algorithm using an [`OrReducer`] combining the bits for the history map and the bit from ``HitcountsMapObserver``.
 pub type AflMapFeedback<O, S, T> = MapFeedback<DifferentIsNovel, O, OrReducer, S, T>;
 
+/// A [`MapFeedback`] that strives to maximize the map contents, but not mark new neighbours as interesting.
+pub type MaxNeighbourMapFeedback<O, S, T> = MapFeedback<DifferentIsNovel, O, MaxNeighbourReducer, S, T>;
 /// A [`MapFeedback`] that strives to maximize the map contents.
 pub type MaxMapFeedback<O, S, T> = MapFeedback<DifferentIsNovel, O, MaxReducer, S, T>;
 /// A [`MapFeedback`] that strives to minimize the map contents.
@@ -97,6 +102,24 @@ where
     #[inline]
     fn reduce(_history: T, new: T) -> T {
         new
+    }
+}
+
+/// A [`MaxNeighbourReducer`] reduces int values and returns their maximum.
+#[derive(Clone, Debug)]
+pub struct MaxNeighbourReducer {}
+
+impl<T> Reducer<T> for MaxNeighbourReducer
+where
+    T: Default + Copy + 'static + PartialOrd + PartialEq + From<u8>,
+{
+    #[inline]
+    fn reduce(first: T, second: T) -> T {
+        if first > second {
+            first
+        } else {
+            second
+        }
     }
 }
 
@@ -220,6 +243,22 @@ where
     }
 }
 
+/// Feedback containing the number of hits that each neighbour has
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MapNeighboursFeedbackMetadata {
+    /// Vec containing a list of hitcounts (each index corresponds to the hitmap index)
+    pub hitcounts: Vec<usize>,
+    /// Set of all block indexes reachable from the current corpus
+    pub reachable_blocks: HashSet<usize>,
+    /// Set of all block indexes that have been covered by the current corpus
+    pub covered_blocks: HashSet<usize>,
+    /// List of the corpusIds that were present last time the queue weightings were
+    /// recalculated
+    pub corpus_ids_present_at_recalc: Vec<CorpusId>,
+}
+
+libafl_bolts::impl_serdeany!(MapNeighboursFeedbackMetadata);
+
 /// A testcase metadata holding a list of indexes of a map
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(
@@ -305,6 +344,66 @@ impl MapNoveltiesMetadata {
     }
 }
 
+/// A testcase metadata holding a list of neighbours
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(
+    any(not(feature = "serdeany_autoreg"), miri),
+    allow(clippy::unsafe_derive_deserialize)
+)] // for SerdeAny
+pub struct MapUncoveredNeighboursMetadata {
+    /// A `list` of all reachable entries.
+    pub all_reachable: Vec<(usize, usize)>,
+    // /// A list of all coverage map indexes that are 1 step away
+    // pub direct_neighbours: HashSet<usize>,
+    // /// A list of functions reachable from this input
+    // pub called_functions: HashSet<String>,
+}
+
+impl MapUncoveredNeighboursMetadata {
+    /// Compute the score given this metadata
+    pub fn compute_score(&self) -> f64 {
+//        self.all_reachable.len() as f64
+        let mut score = 0f64;
+        for &(depth, _idx) in &self.all_reachable {
+//            let weighting = if depth > 10 {
+//                2.pow(10)
+//            } else {
+//                2.pow(depth as u32 - 1)
+//            };
+//            score += 1f64 / weighting as f64;
+//            score += 1f64
+            score += 1f64 / depth as f64
+        }
+        score
+    }
+}
+
+libafl_bolts::impl_serdeany!(MapUncoveredNeighboursMetadata);
+
+// impl AsSlice for MapUncoveredNeighboursMetadata {
+//     type Entry = usize;
+//     /// Convert to a slice
+//     #[must_use]
+//     fn as_slice(&self) -> &[usize] {
+//         self.list.as_slice()
+//     }
+// }
+// impl AsMutSlice for MapUncoveredNeighboursMetadata {
+//     type Entry = usize;
+//     /// Convert to a slice
+//     #[must_use]
+//     fn as_mut_slice(&mut self) -> &mut [usize] {
+//         self.list.as_mut_slice()
+//     }
+// }
+//impl MapUncoveredNeighboursMetadata {
+//    /// Creates a new [`struct@MapNeighboursMetadata`]
+//    #[must_use]
+//    pub fn new(set: HashSet<usize>) -> Self {
+//        Self { set }
+//    }
+//}
+
 /// The state of [`MapFeedback`]
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "T: DeserializeOwned")]
@@ -372,7 +471,9 @@ pub struct MapFeedback<N, O, R, S, T> {
     indexes: bool,
     /// New indexes observed in the last observation
     novelties: Option<Vec<usize>>,
-    /// Name identifier of this instance
+    /// New neighbours observed in the last observation
+    neighbours: Option<Vec<usize>>,
+    /// slice pointing to the neighbours map
     name: String,
     /// Name identifier of the observer
     observer_name: String,
@@ -393,15 +494,23 @@ where
 impl<N, O, R, S, T> Feedback<S> for MapFeedback<N, O, R, S, T>
 where
     N: IsNovel<T>,
-    O: MapObserver<Entry = T> + for<'it> AsIter<'it, Item = T>,
+    O: MapObserver<Entry = T> + for<'it> AsIter<'it, Item = T> + AsSlice<Entry = T>,
     R: Reducer<T>,
-    S: State + HasNamedMetadata,
-    T: Default + Copy + Serialize + for<'de> Deserialize<'de> + PartialEq + Debug + 'static,
+    S: State + HasNamedMetadata + HasMetadata + HasCorpus,
+    T: Default + Copy + Serialize + for<'de> Deserialize<'de> + PartialEq + Debug + 'static + From<u8>,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         // Initialize `MapFeedbackMetadata` with an empty vector and add it to the state.
         // The `MapFeedbackMetadata` would be resized on-demand in `is_interesting`
         state.add_named_metadata(MapFeedbackMetadata::<T>::default(), &self.name);
+        state.add_metadata(
+            MapNeighboursFeedbackMetadata { 
+                hitcounts: vec![], 
+                reachable_blocks: HashSet::new(),
+                covered_blocks: HashSet::new(),
+                corpus_ids_present_at_recalc: vec![],
+            }, 
+        );
         Ok(())
     }
 
@@ -446,10 +555,13 @@ where
     where
         OT: ObserversTuple<S>,
     {
-        if let Some(novelties) = self.novelties.as_mut().map(core::mem::take) {
-            let meta = MapNoveltiesMetadata::new(novelties);
+        let mut novelties = vec![];
+        if let Some(taken) = self.novelties.as_mut().map(core::mem::take) {
+            novelties = taken;
+            let meta = MapNoveltiesMetadata::new(novelties.clone());
             testcase.add_metadata(meta);
         }
+
         let observer = observers.match_name::<O>(&self.observer_name).unwrap();
         let initial = observer.initial();
         let map_state = state
@@ -462,6 +574,7 @@ where
         }
 
         let history_map = map_state.history_map.as_mut_slice();
+        let mut covered_indexes = vec![];
         if self.indexes {
             let mut indices = Vec::new();
 
@@ -474,8 +587,21 @@ where
                 history_map[i] = R::reduce(history_map[i], value);
                 indices.push(i);
             }
+            covered_indexes = indices.clone();
             let meta = MapIndexesMetadata::new(indices);
             testcase.add_metadata(meta);
+
+//            print!("Filled in history_map: [");
+//            for (i, value) in history_map
+//                .iter()
+//                .copied()
+//                .enumerate()
+//                .filter(|(_, value)| *value != initial)
+//            {
+//                print!("({}, {:?}), ", i, history_map[i]);
+//            }
+//            println!("]");
+
         } else {
             for (i, value) in observer
                 .as_iter()
@@ -486,6 +612,67 @@ where
                 history_map[i] = R::reduce(history_map[i], value);
             }
         }
+
+        if let Some(_taken) = self.neighbours.as_mut().map(core::mem::take) {
+            use std::time::Instant;
+            let _now = Instant::now();
+
+            let coverage_map = history_map.to_vec();
+            let _map_filled_set = history_map.iter()
+                .enumerate()
+                .filter(|(_idx,val)| **val != T::default())
+                .map(|(idx,_)| idx)
+                .collect::<HashSet<usize>>();
+
+            if let Ok(cfg_metadata) = state.metadata_mut::<ControlFlowGraph>() {
+                cfg_metadata.check_for_functions_needing_recalc(&novelties);
+                let noisy_neighbours = cfg_metadata.get_all_direct_neighbours(&covered_indexes);
+                let mut direct_neighbours = HashSet::new();
+                for &neighbour_idx in &noisy_neighbours {
+                    if neighbour_idx >= 1_000_000 {
+                        // don't question it, just add the indirect call
+                        direct_neighbours.insert(neighbour_idx);
+                        continue;
+                    }
+
+                    if neighbour_idx > coverage_map.len() ||  coverage_map[neighbour_idx] == T::default() {
+                        direct_neighbours.insert(neighbour_idx);
+                    }
+                }
+
+                let meta = MapUncoveredNeighboursMetadata { 
+                    all_reachable: vec![],
+                    // direct_neighbours: direct_neighbours.clone(), 
+                    // called_functions: HashSet::new(),
+                };
+                testcase.add_metadata(meta);
+
+                let neighbours_state = state
+                    .metadata_mut::<MapNeighboursFeedbackMetadata>()
+                    .unwrap();
+
+                let counts = &mut neighbours_state.hitcounts;
+                if len > counts.len() {
+                    counts.resize(len, 0);
+                }
+                for &idx in &novelties {
+                    counts[idx] = 0;
+                    neighbours_state.reachable_blocks.remove(&idx);
+                    neighbours_state.covered_blocks.insert(idx);
+                }
+                for idx in direct_neighbours {
+                    // Don't increment indirect neighbours...
+                    if idx >= 1_000_000 { continue; }
+                    counts[idx] += 1;
+                }
+            }
+
+            // recalc the reachable set for any entries we have just glanced across
+            let novelties_set = novelties.into_iter().collect::<HashSet<usize>>();
+            println!("Novelties: {:?}", novelties_set);
+
+        }
+
         Ok(())
     }
 }
@@ -496,7 +683,7 @@ impl<O, S> Feedback<S> for MapFeedback<DifferentIsNovel, O, MaxReducer, S, u8>
 where
     O: MapObserver<Entry = u8> + AsSlice<Entry = u8>,
     for<'it> O: AsIter<'it, Item = u8>,
-    S: State + HasNamedMetadata,
+    S: State + HasNamedMetadata + HasMetadata + HasCorpus,
 {
     #[allow(clippy::wrong_self_convention)]
     #[allow(clippy::needless_range_loop)]
@@ -662,7 +849,7 @@ fn create_stats_name(name: &str) -> String {
 
 impl<N, O, R, S, T> MapFeedback<N, O, R, S, T>
 where
-    T: PartialEq + Default + Copy + 'static + Serialize + DeserializeOwned + Debug,
+    T: PartialEq + Default + Copy + 'static + Serialize + DeserializeOwned + Debug + From<u8>,
     R: Reducer<T>,
     O: MapObserver<Entry = T>,
     for<'it> O: AsIter<'it, Item = T>,
@@ -670,18 +857,20 @@ where
     S: UsesInput + HasNamedMetadata,
 {
     /// Create new `MapFeedback`
-    #[must_use]
-    pub fn new(map_observer: &O) -> Self {
-        Self {
-            indexes: false,
-            novelties: None,
-            name: MAPFEEDBACK_PREFIX.to_string() + map_observer.name(),
-            observer_name: map_observer.name().to_string(),
-            stats_name: create_stats_name(map_observer.name()),
-            always_track: false,
-            phantom: PhantomData,
-        }
-    }
+    // #[must_use]
+    // pub fn new(map_observer: &O) -> Self {
+    //     Self {
+    //         indexes: false,
+    //         novelties: None,
+    //         neighbours: None,
+    //         name: MAPFEEDBACK_PREFIX.to_string() + map_observer.name(),
+    //         observer_name: map_observer.name().to_string(),
+    //         neighbours_feedback_name: NEIGHBOURS_FEEDBACK_NAME.to_string(),
+    //         stats_name: create_stats_name(map_observer.name()),
+    //         always_track: false,
+    //         phantom: PhantomData,
+    //     }
+    // }
 
     /// Create new `MapFeedback` specifying if it must track indexes of used entries and/or novelties
     #[must_use]
@@ -689,6 +878,7 @@ where
         Self {
             indexes: track_indexes,
             novelties: if track_novelties { Some(vec![]) } else { None },
+            neighbours: Some(vec![]),
             name: MAPFEEDBACK_PREFIX.to_string() + map_observer.name(),
             observer_name: map_observer.name().to_string(),
             stats_name: create_stats_name(map_observer.name()),
@@ -698,18 +888,20 @@ where
     }
 
     /// Create new `MapFeedback`
-    #[must_use]
-    pub fn with_names(name: &'static str, observer_name: &'static str) -> Self {
-        Self {
-            indexes: false,
-            novelties: None,
-            name: name.to_string(),
-            observer_name: observer_name.to_string(),
-            stats_name: create_stats_name(name),
-            phantom: PhantomData,
-            always_track: false,
-        }
-    }
+    // #[must_use]
+    // pub fn with_names(name: &'static str, observer_name: &'static str) -> Self {
+    //     Self {
+    //         indexes: false,
+    //         novelties: None,
+    //         neighbours: None,
+    //         name: name.to_string(),
+    //         observer_name: observer_name.to_string(),
+    //         stats_name: create_stats_name(name),
+    //         neighbours_feedback_name: NEIGHBOURS_FEEDBACK_NAME.to_string(),
+    //         phantom: PhantomData,
+    //         always_track: false,
+    //     }
+    // }
 
     /// For tracking, enable `always_track` mode, that also adds `novelties` or `indexes`,
     /// even if the map is not novel for this feedback.
@@ -721,37 +913,41 @@ where
     /// Creating a new `MapFeedback` with a specific name. This is usefully whenever the same
     /// feedback is needed twice, but with a different history. Using `new()` always results in the
     /// same name and therefore also the same history.
-    #[must_use]
-    pub fn with_name(name: &'static str, map_observer: &O) -> Self {
-        Self {
-            indexes: false,
-            novelties: None,
-            name: name.to_string(),
-            observer_name: map_observer.name().to_string(),
-            stats_name: create_stats_name(name),
-            always_track: false,
-            phantom: PhantomData,
-        }
-    }
+    // #[must_use]
+    // pub fn with_name(name: &'static str, map_observer: &O) -> Self {
+    //     Self {
+    //         indexes: false,
+    //         novelties: None,
+    //         neighbours: None,
+    //         name: name.to_string(),
+    //         observer_name: map_observer.name().to_string(),
+    //         neighbours_feedback_name: NEIGHBOURS_FEEDBACK_NAME.to_string(),
+    //         stats_name: create_stats_name(name),
+    //         always_track: false,
+    //         phantom: PhantomData,
+    //     }
+    // }
 
     /// Create new `MapFeedback` specifying if it must track indexes of used entries and/or novelties
-    #[must_use]
-    pub fn with_names_tracking(
-        name: &'static str,
-        observer_name: &'static str,
-        track_indexes: bool,
-        track_novelties: bool,
-    ) -> Self {
-        Self {
-            indexes: track_indexes,
-            novelties: if track_novelties { Some(vec![]) } else { None },
-            observer_name: observer_name.to_string(),
-            stats_name: create_stats_name(name),
-            name: name.to_string(),
-            always_track: false,
-            phantom: PhantomData,
-        }
-    }
+    // #[must_use]
+    // pub fn with_names_tracking(
+    //     name: &'static str,
+    //     observer_name: &'static str,
+    //     track_indexes: bool,
+    //     track_novelties: bool,
+    // ) -> Self {
+    //     Self {
+    //         indexes: track_indexes,
+    //         novelties: if track_novelties { Some(vec![]) } else { None },
+    //         neighbours: if track_novelties { Some(vec![]) } else { None },
+    //         observer_name: observer_name.to_string(),
+    //         neighbours_feedback_name: NEIGHBOURS_FEEDBACK_NAME.to_string(),
+    //         stats_name: create_stats_name(name),
+    //         name: name.to_string(),
+    //         always_track: false,
+    //         phantom: PhantomData,
+    //     }
+    // }
 
     #[allow(clippy::wrong_self_convention)]
     #[allow(clippy::needless_range_loop)]
@@ -784,6 +980,12 @@ where
         let history_map = map_state.history_map.as_slice();
 
         let initial = observer.initial();
+
+        // print!("listing edges: ");
+        // for (i, item) in observer.as_iter().copied().enumerate().filter(|(_,x)| *x != initial) {
+        //     print!("{i}: {:?}, ", item);
+        // }
+        // println!("");
 
         if let Some(novelties) = self.novelties.as_mut() {
             novelties.clear();
@@ -828,10 +1030,10 @@ where
                     name: self.stats_name.to_string(),
                     value: UserStats::new(
                         UserStatsValue::Ratio(
-                            self.novelties
-                                .as_ref()
-                                .map_or(filled, |novelties| filled + novelties.len())
-                                as u64,
+                            // self.novelties
+                            //     .as_ref()
+                            //     .map_or(filled, |novelties| filled + novelties.len())
+                            filled as u64,
                             len as u64,
                         ),
                         AggregatorOps::Avg,

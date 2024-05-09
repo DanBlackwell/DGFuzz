@@ -10,6 +10,8 @@ typedef uint32_t prev_loc_t;
 
 extern uint8_t __afl_area_ptr_local[EDGES_MAP_SIZE];
 uint8_t       *__afl_area_ptr = __afl_area_ptr_local;
+extern uint8_t __afl_neighbours_map_ptr_local[EDGES_MAP_SIZE];
+uint8_t       *__afl_neighbours_map_ptr = __afl_neighbours_map_ptr_local;
 
 extern uint32_t __afl_acc_memop_ptr_local[ACCOUNTING_MAP_SIZE];
 uint32_t       *__afl_acc_memop_ptr = __afl_acc_memop_ptr_local;

@@ -17,7 +17,7 @@ pub fn main() {
         dir.pop();
 
         // Must be always present, even without --libafl
-        args.push("-fsanitize-coverage=trace-pc-guard,trace-cmp".into());
+//        args.push("-fsanitize-coverage=trace-pc-guard,trace-cmp".into());
 
         let mut cc = ClangWrapper::new();
 
@@ -33,6 +33,7 @@ pub fn main() {
             .parse_args(&args)
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, "fuzzbench")
+            .add_pass(LLVMPasses::SanCovWithCFG)
             .add_pass(LLVMPasses::CmpLogRtn)
             .run()
             .expect("Failed to run the wrapped compiler")

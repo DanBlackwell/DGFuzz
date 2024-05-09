@@ -11,6 +11,10 @@ use crate::{ACCOUNTING_MAP_SIZE, EDGES_MAP_SIZE};
 #[no_mangle]
 pub static mut __afl_area_ptr_local: [u8; EDGES_MAP_SIZE] = [0; EDGES_MAP_SIZE];
 pub use __afl_area_ptr_local as EDGES_MAP;
+/// The map for neighbours
+#[no_mangle]
+pub static mut __afl_neighbours_map_ptr_local: [u8; EDGES_MAP_SIZE] = [0; EDGES_MAP_SIZE];
+pub use __afl_neighbours_map_ptr_local as NEIGHBOURS_MAP;
 
 /// The map for accounting mem writes.
 #[no_mangle]
@@ -23,6 +27,9 @@ pub static mut MAX_EDGES_NUM: usize = 0;
 extern "C" {
     /// The area pointer points to the edges map.
     pub static mut __afl_area_ptr: *mut u8;
+
+    /// This points to the neighbours map 
+    pub static mut __afl_neighbours_map_ptr: *mut u8;
 
     /// The area pointer points to the accounting mem operations map.
     pub static mut __afl_acc_memop_ptr: *mut u32;
@@ -37,6 +44,7 @@ extern "C" {
 }
 pub use __afl_acc_memop_ptr as ACCOUNTING_MEMOP_MAP_PTR;
 pub use __afl_area_ptr as EDGES_MAP_PTR;
+pub use __afl_neighbours_map_ptr as NEIGHBOURS_MAP_PTR;
 
 /// Return Tokens from the compile-time token section
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
@@ -68,6 +76,18 @@ use libafl_bolts::ownedref::OwnedMutSlice;
 #[must_use]
 pub unsafe fn edges_map_mut_slice<'a>() -> OwnedMutSlice<'a, u8> {
     OwnedMutSlice::from_raw_parts_mut(edges_map_mut_ptr(), edges_max_num())
+}
+
+/// Gets the neighbours map from the `NEIGHBOURS_MAP_PTR` raw pointer.
+/// Assumes a `len` of `EDGES_MAP_PTR_NUM`.
+///
+/// # Safety
+///
+/// This function will crash if `neighbours_map_mut_ptr` is not a valid pointer.
+/// The [`edges_max_num`] needs to be smaller than, or equal to the size of the map.
+#[must_use]
+pub unsafe fn neighbours_map_mut_slice<'a>() -> OwnedMutSlice<'a, u8> {
+    OwnedMutSlice::from_raw_parts_mut(neighbours_map_mut_ptr(), edges_max_num())
 }
 
 /// Gets a new [`StdMapObserver`] from the current [`edges_map_mut_slice`].
@@ -102,6 +122,21 @@ where
     S: Into<String>,
 {
     StdMapObserver::from_mut_slice(name, edges_map_mut_slice())
+}
+
+/// Gets the current neighbours map pt
+/// It will usually take `EDGES_MAP`, but `EDGES_MAP_PTR`,
+/// if built with the `pointer_maps` feature.
+#[must_use]
+pub fn neighbours_map_mut_ptr() -> *mut u8 {
+    unsafe {
+        if cfg!(feature = "pointer_maps") {
+            assert!(!NEIGHBOURS_MAP_PTR.is_null());
+            NEIGHBOURS_MAP_PTR
+        } else {
+            NEIGHBOURS_MAP.as_mut_ptr()
+        }
+    }
 }
 
 /// Gets the current edges map pt

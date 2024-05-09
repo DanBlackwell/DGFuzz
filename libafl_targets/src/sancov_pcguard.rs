@@ -10,6 +10,11 @@ compile_error!(
     "the libafl_targets `sancov_pcguard_edges` and `sancov_pcguard_hitcounts` features are mutually exclusive."
 );
 
+use std::collections::HashSet;
+use once_cell::unsync::Lazy;
+static mut SEEN_GUARDS: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
+static mut UNUSED_GUARD_INDEXES: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
+
 /// Callback for sancov `pc_guard` - usually called by `llvm` on each block or edge.
 ///
 /// # Safety
@@ -18,6 +23,9 @@ compile_error!(
 #[no_mangle]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     let pos = *guard as usize;
+    //if !seen_guards.contains(&(pos as u32)) {
+    //    panic!("ERROR: saw a guard {pos} that was not seen in the init???");
+    //}
     #[cfg(feature = "pointer_maps")]
     {
         #[cfg(feature = "sancov_pcguard_edges")]
@@ -57,22 +65,28 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
         EDGES_MAP_PTR_NUM = EDGES_MAP.len();
     }
 
-    if start == stop || *start != 0 {
+    if start == stop { //|| *start != 0 {
         return;
     }
 
+    let mut seen = vec![];
+    let mut set_seen = HashSet::new();
+    let mut dupes = vec![];
     while start < stop {
-        *start = MAX_EDGES_NUM as u32;
-        start = start.offset(1);
-
-        #[cfg(feature = "pointer_maps")]
-        {
-            MAX_EDGES_NUM = MAX_EDGES_NUM.wrapping_add(1) % EDGES_MAP_PTR_NUM;
+        seen.push(*start);
+        SEEN_GUARDS.insert(*start);
+        if !set_seen.insert(*start) {
+           dupes.push(*start); 
         }
-        #[cfg(not(feature = "pointer_maps"))]
-        {
-            MAX_EDGES_NUM = MAX_EDGES_NUM.wrapping_add(1);
-            assert!((MAX_EDGES_NUM <= EDGES_MAP.len()), "The number of edges reported by SanitizerCoverage exceed the size of the edges map ({}). Use the LIBAFL_EDGES_MAP_SIZE env to increase it at compile time.", EDGES_MAP.len());
+        start = start.offset(1);
+    }
+
+    let max = seen.iter().fold(0, |max, &x| if x > max { x } else { max });
+    MAX_EDGES_NUM = max as usize + 1;
+    for i in 0..=max {
+        if !set_seen.contains(&i) { 
+            UNUSED_GUARD_INDEXES.insert(i);
         }
     }
+    // std::fs::write("debug.info", format!("all: {:?},\ndupes:{:?},\nunseen: {:?}", seen, dupes, unused_guard_indexes).as_bytes());
 }

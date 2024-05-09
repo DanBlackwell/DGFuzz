@@ -41,6 +41,8 @@ pub enum LLVMPasses {
     #[cfg(unix)]
     /// The CmpLog Instruction pass
     CmpLogInstructions,
+    /// SanCov pass from AFL++ with added CFG output
+    SanCovWithCFG,
 }
 
 impl LLVMPasses {
@@ -63,6 +65,8 @@ impl LLVMPasses {
             #[cfg(unix)]
             LLVMPasses::CmpLogInstructions => PathBuf::from(env!("OUT_DIR"))
                 .join(format!("cmplog-instructions-pass.{}", dll_extension())),
+            LLVMPasses::SanCovWithCFG => PathBuf::from(env!("OUT_DIR"))
+                .join(format!("SanitizerCoverage.{}", dll_extension())),
         }
     }
 }

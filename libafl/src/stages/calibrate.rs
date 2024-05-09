@@ -15,7 +15,7 @@ use crate::{
     corpus::{Corpus, HasCurrentCorpusIdx, SchedulerTestcaseMetadata},
     events::{Event, EventFirer, LogSeverity},
     executors::{Executor, ExitKind, HasObservers},
-    feedbacks::{map::MapFeedbackMetadata, HasObserverName},
+    feedbacks::{map::{MapNeighboursFeedbackMetadata, MapFeedbackMetadata}, HasObserverName},
     fuzzer::Evaluator,
     monitors::{AggregatorOps, UserStats, UserStatsValue},
     observers::{MapObserver, ObserversTuple, UsesObserver},
@@ -220,6 +220,13 @@ where
                 }
 
                 if !unstable_entries.is_empty() && iter < CAL_STAGE_MAX {
+                    let neighbours_state = state
+                        .metadata_mut::<MapNeighboursFeedbackMetadata>();
+                    if let Ok(neighbours_state) = neighbours_state {
+                        for &entry in &unstable_entries {
+                            neighbours_state.covered_blocks.insert(entry);
+                        }
+                    }
                     iter += 2;
                 }
             }
@@ -298,6 +305,9 @@ where
             data.set_cycle_and_time((total_time, iter));
             data.set_bitmap_size(bitmap_size);
             data.set_handicap(handicap);
+        } else {
+            let mut testcase = state.corpus().get(corpus_idx)?.borrow_mut();
+            testcase.set_exec_time(total_time / (iter as u32));
         }
 
         *state.executions_mut() += i;

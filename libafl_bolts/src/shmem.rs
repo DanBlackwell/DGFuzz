@@ -414,6 +414,7 @@ where
     }
 
     fn new_shmem(&mut self, map_size: usize) -> Result<Self::ShMem, Error> {
+        println!("using RcShMem");
         Ok(Self::ShMem {
             internal: ManuallyDrop::new(self.internal.borrow_mut().new_shmem(map_size)?),
             provider: self.internal.clone(),
@@ -756,6 +757,7 @@ pub mod unix_shmem {
                 })
             }
             fn new_shmem(&mut self, map_size: usize) -> Result<Self::ShMem, Error> {
+                println!("using mmapShMem");
                 let id = self.rand.next() as u32;
                 MmapShMem::new(map_size, id)
             }
@@ -946,6 +948,7 @@ pub mod unix_shmem {
                 Ok(Self {})
             }
             fn new_shmem(&mut self, map_size: usize) -> Result<Self::ShMem, Error> {
+                println!("using commonUnixShMem");
                 CommonUnixShMem::new(map_size)
             }
 

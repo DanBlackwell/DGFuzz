@@ -11,7 +11,7 @@ use clap::{Arg, ArgAction, Command};
 use libafl::{
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleEventManager,
-    executors::forkserver::ForkserverExecutor,
+    executors::forkserver::{ForkserverExecutor, ControlFlowGraph},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -23,10 +23,10 @@ use libafl::{
     },
     observers::{HitcountsMapObserver, StdCmpValuesObserver, StdMapObserver, TimeObserver},
     schedulers::{
-        powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
+        probabilistic_sampling::UncoveredNeighboursProbabilitySamplingScheduler,
     },
     stages::{
-        calibrate::CalibrationStage, power::StdPowerMutationalStage, StdMutationalStage,
+        calibrate::CalibrationStage, StdMutationalStage,
         TracingStage,
     },
     state::{HasCorpus, HasMetadata, StdState},
@@ -65,6 +65,12 @@ pub fn main() {
                 .short('x')
                 .long("tokens")
                 .help("A file to read tokens from, to be used during fuzzing"),
+        )
+        .arg(
+            Arg::new("cfg_file")
+                .short('c')
+                .long("cfg_file")
+                .help("The file to read Control Flow Graph from"),
         )
         .arg(
             Arg::new("logfile")
@@ -155,6 +161,8 @@ pub fn main() {
 
     let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
 
+    let cfg_file = res.get_one::<String>("cfg_file").map(PathBuf::from);
+
     let logfile = PathBuf::from(res.get_one::<String>("logfile").unwrap().to_string());
 
     let timeout = Duration::from_millis(
@@ -193,6 +201,7 @@ pub fn main() {
         crashes,
         &in_dir,
         tokens,
+        cfg_file,
         &logfile,
         timeout,
         executable,
@@ -211,6 +220,7 @@ fn fuzz(
     objective_dir: PathBuf,
     seed_dir: &PathBuf,
     tokenfile: Option<PathBuf>,
+    cfg_file: Option<PathBuf>,
     logfile: &PathBuf,
     timeout: Duration,
     executable: String,
@@ -227,10 +237,11 @@ fn fuzz(
     let log = RefCell::new(OpenOptions::new().append(true).create(true).open(logfile)?);
 
     // 'While the monitor are state, they are usually used in the broker - which is likely never restarted
-    let monitor = SimpleMonitor::new(|s| {
+    let monitor = SimpleMonitor::with_user_monitor(|s| {
         println!("{s}");
         writeln!(log.borrow_mut(), "{:?} {}", current_time(), s).unwrap();
-    });
+    }, true);
+    // let monitor = SimplePrintingMonitor::new();
 
     // The event manager handle the various events generated during the fuzzing loop
     // such as the notification of the addition of a new item to the corpus
@@ -254,7 +265,7 @@ fn fuzz(
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
 
-    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, false);
+    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, true);
 
     let calibration = CalibrationStage::new(&map_feedback);
 
@@ -297,29 +308,46 @@ fn fuzz(
         5,
     )?;
 
-    let power = StdPowerMutationalStage::new(mutator);
+    let mutation = StdMutationalStage::new(mutator);
+    // let power = StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(StdWeightedScheduler::with_schedule(
-        &mut state,
-        &edges_observer,
-        Some(PowerSchedule::EXPLORE),
-    ));
+    // let scheduler = IndexesLenTimeMinimizerScheduler::new(StdWeightedScheduler::with_schedule(
+    //     &mut state,
+    //     &edges_observer,
+    //     Some(PowerSchedule::EXPLORE),
+    // ));
+    let scheduler = UncoveredNeighboursProbabilitySamplingScheduler::new();
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
     let mut tokens = Tokens::new();
-    let mut executor = ForkserverExecutor::builder()
+    let mut builder = ForkserverExecutor::builder()
         .program(executable)
         .debug_child(debug_child)
         .shmem_provider(&mut shmem_provider)
-        .autotokens(&mut tokens)
         .parse_afl_cmdline(arguments)
         .coverage_map_size(MAP_SIZE)
+        .autotokens(&mut tokens)
         .timeout(timeout)
         .kill_signal(signal)
-        .is_persistent(true)
+        .is_persistent(true);
+
+    let mut control_flow_graph = ControlFlowGraph::new();
+
+    if let Some(cfg_file) = cfg_file {
+        println!("Loading CFG from file: {:?}", cfg_file);
+        let mut file = std::fs::File::open(cfg_file)?;
+        let mut buffer = Vec::new();
+        use std::io::Read;
+        file.read_to_end(&mut buffer)?;
+        control_flow_graph.parse_from_buf(&buffer);
+    } else {
+        builder = builder.control_flow_graph(&mut control_flow_graph);
+    }
+
+    let mut executor = builder
         .build_dynamic_map(edges_observer, tuple_list!(time_observer))
         .unwrap();
 
@@ -327,9 +355,13 @@ fn fuzz(
     if let Some(tokenfile) = tokenfile {
         tokens.add_from_file(tokenfile)?;
     }
+
     if !tokens.is_empty() {
         state.add_metadata(tokens);
     }
+
+    assert!(!control_flow_graph.is_empty());
+    state.add_metadata(control_flow_graph);
 
     state
         .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &[seed_dir.clone()])
@@ -366,12 +398,12 @@ fn fuzz(
             StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
         // The order of the stages matter!
-        let mut stages = tuple_list!(calibration, tracing, i2s, power);
+        let mut stages = tuple_list!(calibration, tracing, i2s, mutation);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
     } else {
         // The order of the stages matter!
-        let mut stages = tuple_list!(calibration, power);
+        let mut stages = tuple_list!(calibration, mutation);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
     }

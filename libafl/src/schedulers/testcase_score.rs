@@ -6,7 +6,7 @@ use libafl_bolts::{HasLen, HasRefCnt};
 
 use crate::{
     corpus::{Corpus, SchedulerTestcaseMetadata, Testcase},
-    feedbacks::MapIndexesMetadata,
+    feedbacks::{MapIndexesMetadata, map::MapUncoveredNeighboursMetadata},
     schedulers::{
         minimizer::{IsFavoredMetadata, TopRatedsMetadata},
         powersched::{PowerSchedule, SchedulerMetadata},
@@ -137,21 +137,6 @@ where
             perf_score = 150.0;
         }
 
-        let q_bitmap_size = tcmeta.bitmap_size() as f64;
-        if q_bitmap_size * 0.3 > avg_bitmap_size as f64 {
-            perf_score *= 3.0;
-        } else if q_bitmap_size * 0.5 > avg_bitmap_size as f64 {
-            perf_score *= 2.0;
-        } else if q_bitmap_size * 0.75 > avg_bitmap_size as f64 {
-            perf_score *= 1.5;
-        } else if q_bitmap_size * 3.0 < avg_bitmap_size as f64 {
-            perf_score *= 0.25;
-        } else if q_bitmap_size * 2.0 < avg_bitmap_size as f64 {
-            perf_score *= 0.5;
-        } else if q_bitmap_size * 1.5 < avg_bitmap_size as f64 {
-            perf_score *= 0.75;
-        }
-
         if tcmeta.handicap() >= 4 {
             perf_score *= 4.0;
             // tcmeta.set_handicap(tcmeta.handicap() - 4);
@@ -160,14 +145,31 @@ where
             // tcmeta.set_handicap(tcmeta.handicap() - 1);
         }
 
-        if tcmeta.depth() >= 4 && tcmeta.depth() < 8 {
-            perf_score *= 2.0;
-        } else if tcmeta.depth() >= 8 && tcmeta.depth() < 14 {
-            perf_score *= 3.0;
-        } else if tcmeta.depth() >= 14 && tcmeta.depth() < 25 {
-            perf_score *= 4.0;
-        } else if tcmeta.depth() >= 25 {
-            perf_score *= 5.0;
+        if !entry.has_metadata::<MapUncoveredNeighboursMetadata>() {
+            let q_bitmap_size = tcmeta.bitmap_size() as f64;
+            if q_bitmap_size * 0.3 > avg_bitmap_size as f64 {
+                perf_score *= 3.0;
+            } else if q_bitmap_size * 0.5 > avg_bitmap_size as f64 {
+                perf_score *= 2.0;
+            } else if q_bitmap_size * 0.75 > avg_bitmap_size as f64 {
+                perf_score *= 1.5;
+            } else if q_bitmap_size * 3.0 < avg_bitmap_size as f64 {
+                perf_score *= 0.25;
+            } else if q_bitmap_size * 2.0 < avg_bitmap_size as f64 {
+                perf_score *= 0.5;
+            } else if q_bitmap_size * 1.5 < avg_bitmap_size as f64 {
+                perf_score *= 0.75;
+            }
+
+            if tcmeta.depth() >= 4 && tcmeta.depth() < 8 {
+                perf_score *= 2.0;
+            } else if tcmeta.depth() >= 8 && tcmeta.depth() < 14 {
+                perf_score *= 3.0;
+            } else if tcmeta.depth() >= 14 && tcmeta.depth() < 25 {
+                perf_score *= 4.0;
+            } else if tcmeta.depth() >= 25 {
+                perf_score *= 5.0;
+            }
         }
 
         let mut factor: f64 = 1.0;

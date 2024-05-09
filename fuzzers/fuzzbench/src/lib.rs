@@ -29,6 +29,7 @@ use libafl::{
         StdMOptMutator, StdScheduledMutator, Tokens,
     },
     observers::{HitcountsMapObserver, TimeObserver},
+    prelude::{forkserver::ControlFlowGraph, probabilistic_sampling::UncoveredNeighboursProbabilitySamplingScheduler},
     schedulers::{
         powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
     },
@@ -51,6 +52,7 @@ use libafl_bolts::{
 use libafl_targets::autotokens;
 use libafl_targets::{
     libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, CmpLogObserver,
+    neighbours_map_mut_slice
 };
 #[cfg(unix)]
 use nix::{self, unistd::dup};
@@ -83,6 +85,12 @@ pub extern "C" fn libafl_main() {
                 .short('x')
                 .long("tokens")
                 .help("A file to read tokens from, to be used during fuzzing"),
+        )
+        .arg(
+            Arg::new("cfg_file")
+                .short('c')
+                .long("cfg_file")
+                .help("The file to read Control Flow Graph from"),
         )
         .arg(
             Arg::new("logfile")
@@ -156,6 +164,8 @@ pub extern "C" fn libafl_main() {
 
     let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
 
+    let cfg_file = res.get_one::<String>("cfg_file").map(PathBuf::from);
+
     let logfile = PathBuf::from(res.get_one::<String>("logfile").unwrap().to_string());
 
     let timeout = Duration::from_millis(
@@ -166,7 +176,7 @@ pub extern "C" fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, &in_dir, tokens, &logfile, timeout)
+    fuzz(out_dir, crashes, &in_dir, tokens, cfg_file, &logfile, timeout)
         .expect("An error occurred while fuzzing");
 }
 
@@ -200,6 +210,7 @@ fn fuzz(
     objective_dir: PathBuf,
     seed_dir: &PathBuf,
     tokenfile: Option<PathBuf>,
+    cfg_file: Option<PathBuf>,
     logfile: &PathBuf,
     timeout: Duration,
 ) -> Result<(), Error> {
@@ -214,13 +225,13 @@ fn fuzz(
     let file_null = File::open("/dev/null")?;
 
     // 'While the monitor are state, they are usually used in the broker - which is likely never restarted
-    let monitor = SimpleMonitor::new(|s| {
+    let monitor = SimpleMonitor::with_user_monitor(|s| {
         #[cfg(unix)]
         writeln!(&mut stdout_cpy, "{s}").unwrap();
         #[cfg(windows)]
         println!("{s}");
         writeln!(log.borrow_mut(), "{:?} {s}", current_time()).unwrap();
-    });
+    }, true);
 
     // We need a shared map to store our state before a crash.
     // This way, we are able to continue fuzzing afterwards.
@@ -249,7 +260,7 @@ fn fuzz(
 
     let cmplog_observer = CmpLogObserver::new("cmplog", true);
 
-    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, false);
+    let map_feedback = MaxMapFeedback::tracking(&edges_observer, true, true);
 
     let calibration = CalibrationStage::new(&map_feedback);
 
@@ -304,14 +315,16 @@ fn fuzz(
         5,
     )?;
 
-    let power = StdPowerMutationalStage::new(mutator);
+    // let power = StdPowerMutationalStage::new(mutator);
+    let mutation = StdMutationalStage::with_max_iterations(mutator, 1024);
 
     // A minimization+queue policy to get testcasess from the corpus
-    let scheduler = IndexesLenTimeMinimizerScheduler::new(StdWeightedScheduler::with_schedule(
-        &mut state,
-        &edges_observer,
-        Some(PowerSchedule::FAST),
-    ));
+    // let scheduler = IndexesLenTimeMinimizerScheduler::new(StdWeightedScheduler::with_schedule(
+    //     &mut state,
+    //     &edges_observer,
+    //     Some(PowerSchedule::FAST),
+    // ));
+    let scheduler = UncoveredNeighboursProbabilitySamplingScheduler::new();
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
@@ -350,7 +363,7 @@ fn fuzz(
     );
 
     // The order of the stages matter!
-    let mut stages = tuple_list!(calibration, tracing, i2s, power);
+    let mut stages = tuple_list!(calibration, tracing, i2s, mutation);
 
     // Read tokens
     if state.metadata_map().get::<Tokens>().is_none() {
@@ -366,6 +379,29 @@ fn fuzz(
         if !toks.is_empty() {
             state.add_metadata(toks);
         }
+    }
+
+    if state.metadata_map().get::<ControlFlowGraph>().is_none() {
+        if let Some(cfg_file) = cfg_file {
+            let mut control_flow_graph = ControlFlowGraph::new();
+            println!("Loading CFG from file: {:?}", cfg_file);
+            let mut file = std::fs::File::open(cfg_file)?;
+            let mut buffer = Vec::new();
+            use std::io::Read;
+            file.read_to_end(&mut buffer)?;
+            control_flow_graph.parse_from_buf(&buffer);
+
+            let (bb_str, funcs_str) = control_flow_graph.to_graphviz_dot();
+            use std::fs::File;
+            use std::io::prelude::*;
+            let mut file = File::create("bbs.dot").unwrap();
+            file.write_all(bb_str.as_bytes()).unwrap();
+
+            file = File::create("funcs.dot").unwrap();
+            file.write_all(funcs_str.as_bytes()).unwrap();
+
+            state.add_metadata(control_flow_graph);
+        } 
     }
 
     // In case the corpus is empty (on first run), reset
