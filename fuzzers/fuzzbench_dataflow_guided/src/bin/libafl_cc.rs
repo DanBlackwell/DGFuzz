@@ -31,6 +31,8 @@ pub fn main() {
             // add arguments only if --libafl or --libafl-no-link are present
             .need_libafl_arg(true)
             .parse_args(&args)
+            .add_arg("-fsanitize=dataflow")
+            .add_arg("-dfsan-conditional-callbacks")
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, "fuzzbench")
             .add_pass(LLVMPasses::SanCovWithCFG)

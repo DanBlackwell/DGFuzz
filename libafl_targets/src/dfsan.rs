@@ -1,42 +1,31 @@
 //! dfsan logic into targets
 //! The colorization stage from `colorization()` in afl++
 use alloc::{
-    collections::binary_heap::BinaryHeap,
-    string::{String, ToString},
-    vec::Vec,
+    borrow::ToOwned, collections::binary_heap::BinaryHeap, string::{String, ToString}, vec::Vec
 };
 use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, ops::Range};
+use std::collections::HashMap;
 
 use crate::libfuzzer_test_one_input;
-use libafl_bolts::{rands::Rand, tuples::MatchName};
+use libafl_bolts::{rands::Rand, tuples::{tuple_list, MatchName}, AsSlice};
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    corpus::{Corpus, HasCurrentCorpusIdx}, 
-    events::{EventFirer, EventRestarter}, 
-    executors::{Executor, HasObservers}, 
-    inputs::{HasBytesVec, HasTargetBytes}, 
-    mutators::mutations::buffer_copy, 
-    observers::{MapObserver, ObserversTuple}, 
-    prelude::{HasExecutions, HasSolutions}, 
-    stages::Stage, 
-    state::{HasCorpus, HasMetadata, HasRand, UsesState}, 
-    Error, 
-    HasObjective
+    corpus::{Corpus, HasCurrentCorpusIdx}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, inputs::{HasBytesVec, HasTargetBytes}, mark_feature_time, observers::{MapObserver, ObserversTuple}, prelude::{HasClientPerfMonitor, HasExecutions, HasSolutions}, stages::Stage, start_timer, state::{HasCorpus, HasMetadata, HasRand, UsesState}, Error, HasObjective
 };
 
 extern crate libc;
-use libc::{c_char, size_t, c_int};
+use libc::{c_uchar, size_t, c_int};
 
 extern "C" {
     /// keep an array of label values for the conditional following each edge
-    pub static mut dfsan_labels_following_edge: [c_char; 1024 * 1024];
+    pub static mut dfsan_labels_following_edge: [c_uchar; 1024 * 1024];
 
     /// set the relevant callback(s) for DFSan
     fn __dfsan_init();
     /// tag the input with labels 
     fn __tag_input_with_labels(
-        input: *const c_char, 
+        input: *mut c_uchar, 
         label_start_offsets: *const size_t, 
         label_block_len: *const size_t, 
         num_labels: c_int
@@ -47,8 +36,15 @@ pub fn dfsan_init() {
     unsafe { __dfsan_init(); }
 }
 
-pub fn tag_input_with_labels(input: &[u8], label_start_offsets: &[usize], label_block_len: &[usize]) {
-    unsafe{ __tag_input_with_labels(input, label_start_offsets, label_block_len, label_start_offsets.len()) }
+pub fn tag_input_with_labels(input: &mut [u8], label_start_offsets: &[usize], label_block_len: &[usize]) {
+    unsafe{ 
+        __tag_input_with_labels(
+            input.as_mut_ptr(), 
+            label_start_offsets.as_ptr(), 
+            label_block_len.as_ptr(), 
+            label_start_offsets.len() as i32
+        ) 
+    }
 }
 
 
@@ -97,7 +93,7 @@ fn run_and_collect_labels<E, EM, Z>(
     _executor: &mut E,
     state: &mut E::State,
     manager: &mut EM,
-    input_bytes: &[u8],
+    input: &E::Input,
     labels: &Vec<DFSanLabelInfo>,
 ) -> Result<HashMap<usize, Vec<u8>>, Error>
 where
@@ -105,24 +101,23 @@ where
     EM: EventFirer<State = E::State> + EventRestarter,
     Z: UsesState<State = E::State> + HasObjective,
     E::State: HasCorpus + HasSolutions + HasClientPerfMonitor + HasExecutions,
-    E::Input: HasTargetBytes,
+    E::Input: HasBytesVec,
 {
     let mut harness = |input: &E::Input| {
         let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
         let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
-        tag_input_with_labels(input_bytes, &start_offsets, &lens);
+        let mut input_bytes = input.bytes().to_owned();
+        tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
 
         unsafe {
-            libfuzzer_test_one_input(slice.as_ptr(), slice.len());
+            libfuzzer_test_one_input(&input_bytes);
         }
 
         ExitKind::Ok
     };
 
-    let observer = DataflowCmplogObserver;
-
     let mut executor =
-        InProcessExecutor::new(&mut harness, tuple_list!(observer), fuzzer, state, manager)?;
+        InProcessExecutor::new(&mut harness, tuple_list!(), fuzzer, state, manager)?;
 
     start_timer!(state);
     executor.observers_mut().pre_exec_all(state, input)?;
@@ -141,7 +136,14 @@ where
     unsafe{
         for i in 0..dfsan_labels_following_edge.len() {
             if dfsan_labels_following_edge[i] != 0 {
-                labels_for_edge.insert(i, dfsan_labels_following_edge[i]);
+                let the_byte = dfsan_labels_following_edge[i];
+                let mut labels = vec![];
+                for bit in 0..8 {
+                    if the_byte >> bit & 1 == 1 {
+                        labels.push(bit + 1);
+                    }
+                }
+                labels_for_edge.insert(i, labels);
             }
         }
     }
@@ -159,32 +161,31 @@ where
 
 /// The mutational stage using power schedules
 #[derive(Clone, Debug)]
-pub struct DataflowStage<EM, O, E, Z> {
+pub struct DataflowStage<EM, E, Z> {
     #[allow(clippy::type_complexity)]
-    phantom: PhantomData<(E, EM, O, Z)>,
+    phantom: PhantomData<(E, EM, Z)>,
 }
 
-impl DataflowStage<EM, O, E, Z> {
+impl<EM, E, Z> DataflowStage<EM, E, Z> {
     pub fn new() -> Self {
         DataflowStage { phantom: PhantomData }
     }
 }
 
-impl<EM, O, E, Z> UsesState for DataflowStage<EM, O, E, Z>
+impl<EM, E, Z> UsesState for DataflowStage<EM, E, Z>
 where
     E: UsesState,
 {
     type State = E::State;
 }
 
-impl<E, EM, O, Z> Stage<E, EM, Z> for DataflowStage<EM, O, E, Z>
+impl<E, EM, Z> Stage<E, EM, Z> for DataflowStage<EM, E, Z>
 where
-    EM: UsesState<State = E::State> + EventFirer,
+    EM: UsesState<State = E::State> + EventFirer + EventRestarter,
     E: HasObservers + Executor<EM, Z>,
-    E::State: HasCorpus + HasMetadata + HasRand,
+    E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
     E::Input: HasBytesVec,
-    O: MapObserver,
-    Z: UsesState<State = E::State>,
+    Z: UsesState<State = E::State> + HasObjective,
 {
     type Progress = (); // TODO this stage needs resume
 
@@ -198,23 +199,26 @@ where
         manager: &mut EM,
     ) -> Result<(), Error> {
         let idx = state.corpus().current().unwrap();
-        let tc = state.corpus().get(idx).unwrap();
-        let input = tc.borrow().input().unwrap();
-        let input_bytes = input.bytes().cloned();
+        let tc = state.corpus().get(idx).unwrap().borrow();
+        let input = tc.input().as_ref().unwrap();
+        let input_bytes = input.bytes();
         let mut labels = vec![];
         if input_bytes.len() > 7 {
             for idx in 0..8 {
-                let start = (idx as f64) / 8.0 * (input_bytes.len() as f64);
-                let end = (idx + 1 as f64) / 8.0 * (input_bytes.len() as f64);
-                labels.push(DFSanLabelInfo { label: idx, start_pos: start, len: end - start });
+                let start = ((idx as f64) / 8.0 * (input_bytes.len() as f64)).floor() as usize;
+                let end = ((idx as f64 + 1f64) / 8f64 * (input_bytes.len() as f64)).floor() as usize;
+                labels.push(DFSanLabelInfo { label: idx as u8, start_pos: start, len: end - start });
             }
         } else {
             for idx in 0..input_bytes.len() {
-                labels.push(DFSanLabelInfo { label: idx, start_pos: idx, len: 1 });
+                labels.push(DFSanLabelInfo { label: idx as u8, start_pos: idx, len: 1 });
             }
         }
 
-        let labels_for_edge = run_and_collect_labels(fuzzer, executor, state, manager, &input_bytes, &labels)?;
+        let input = input.clone();
+        drop(tc);
+
+        let labels_for_edge = run_and_collect_labels(fuzzer, executor, state, manager, &input, &labels)?;
 
         println!("labels for edge: {:?}", labels_for_edge);
 

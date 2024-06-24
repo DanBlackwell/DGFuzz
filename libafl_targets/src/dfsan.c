@@ -3,12 +3,14 @@
 
 unsigned int last_edge = 0;
 
+void dfsan_found_conditional(dfsan_label label, dfsan_origin origin);
+
 void __dfsan_init() {
     dfsan_set_conditional_callback(dfsan_found_conditional);
 }
 
 void __tag_input_with_labels(
-    const char *input, 
+    char *input, 
     size_t *label_start_offsets, 
     size_t *label_block_len, 
     int num_labels

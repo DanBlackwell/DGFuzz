@@ -167,6 +167,10 @@ const char SanCovLowestStackName[] = "__sancov_lowest_stack";
 //                                   cl::desc("max stack depth tracing"),
 //                                   cl::Hidden, cl::init(false));
 
+namespace llvm {
+  void initializeModuleSanitizerCoverageCFGLegacyPassPass(PassRegistry &PB);
+}
+
 namespace {
 
 typedef struct BBInfo {
@@ -342,9 +346,9 @@ llvmGetPassPluginInfo() {
 
 }
 
-class ModuleSanitizerCoverageLegacyPass : public ModulePass {
+class ModuleSanitizerCoverageCFGLegacyPass : public ModulePass {
 public:
-  ModuleSanitizerCoverageLegacyPass(
+  ModuleSanitizerCoverageCFGLegacyPass(
       const SanitizerCoverageOptions &Options = SanitizerCoverageOptions(),
       const std::vector<std::string> &AllowlistFiles =
           std::vector<std::string>(),
@@ -357,7 +361,7 @@ public:
     if (BlocklistFiles.size() > 0)
       Blocklist = SpecialCaseList::createOrDie(BlocklistFiles,
                                                *vfs::getRealFileSystem());
-    initializeModuleSanitizerCoverageLegacyPassPass(
+    initializeModuleSanitizerCoverageCFGLegacyPassPass(
         *PassRegistry::getPassRegistry());
   }
   bool runOnModule(Module &M) override {
@@ -1586,20 +1590,19 @@ ModuleSanitizerCoverageCFG::getSectionEnd(const std::string &Section) const {
   return "__stop___" + Section;
 }
 
- char ModuleSanitizerCoverageLegacyPass::ID = 0;
- INITIALIZE_PASS_BEGIN(ModuleSanitizerCoverageLegacyPass, "sancov",
+ char ModuleSanitizerCoverageCFGLegacyPass::ID = 0;
+ INITIALIZE_PASS_BEGIN(ModuleSanitizerCoverageCFGLegacyPass, "sancov",
                        "Pass for instrumenting coverage on functions", false,
                        false)
  INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
  INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
- INITIALIZE_PASS_END(ModuleSanitizerCoverageLegacyPass, "sancov",
+ INITIALIZE_PASS_END(ModuleSanitizerCoverageCFGLegacyPass, "sancov",
                      "Pass for instrumenting coverage on functions", false,
                      false)
-ModulePass *llvm::createModuleSanitizerCoverageLegacyPassPass(
-    const SanitizerCoverageOptions &Options,
-    const std::vector<std::string> &AllowlistFiles,
-    const std::vector<std::string> &BlocklistFiles) {
-  return new ModuleSanitizerCoverageLegacyPass(Options, AllowlistFiles,
-                                               BlocklistFiles);
-}
-
+// ModulePass *llvm::createModuleSanitizerCoverageCFGLegacyPassPass(
+//     const SanitizerCoverageOptions &Options,
+//     const std::vector<std::string> &AllowlistFiles,
+//     const std::vector<std::string> &BlocklistFiles) {
+//   return new ModuleSanitizerCoverageCFGLegacyPass(Options, AllowlistFiles,
+//                                                BlocklistFiles);
+// }
