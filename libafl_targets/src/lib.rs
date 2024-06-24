@@ -124,3 +124,8 @@ pub use windows_asan::*;
 pub mod forkserver;
 #[cfg(all(unix, feature = "forkserver"))]
 pub use forkserver::*;
+
+#[cfg(feature = "dataflow")]
+pub mod dfsan;
+#[cfg(feature = "dataflow")]
+pub use dfsan::*;

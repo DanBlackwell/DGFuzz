@@ -29,6 +29,7 @@ default = [
     "cmplog",
     "coverage",
     "common",
+    "dataflow"
 ]
 std = ["libafl/std"]
 libfuzzer = ["std", "common"]
@@ -50,6 +51,7 @@ observers = ["meminterval", "ahash"]
 common = [] # Compile common C code defining sanitizer options and cross-platform intrinsics
 coverage = ["common"] # Compile C code definining coverage maps
 cmplog = ["common"] # Compile C code defining cmp log maps
+dataflow = []
 forkserver = ["common"] # Compile C code for forkserver support
 windows_asan = ["common"] # Compile C code for ASAN on Windows
 whole_archive = [] # use +whole-archive to ensure the presence of weak symbols

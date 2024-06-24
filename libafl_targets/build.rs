@@ -56,6 +56,17 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBAFL_CMPLOG_MAP_H");
     println!("cargo:rerun-if-env-changed=LIBAFL_ACCOUNTING_MAP_SIZE");
 
+    #[cfg(feature = "dataflow")]
+    {
+        println!("cargo:rerun-if-changed=src/dfsan.c");
+        println!("cargo:rerun-if-changed=src/dfsan.h");
+        cc::Build::new()
+            .flag("-fsanitize=dataflow")
+            .flag("-dfsan-conditional-callbacks")
+            .file(src_dir.join("dfsan.c"))
+            .compile("dfsan");
+    }
+
     #[cfg(feature = "common")]
     {
         println!("cargo:rerun-if-changed=src/common.h");
