@@ -16,11 +16,6 @@ pub fn main() {
 
         dir.pop();
 
-        // Must be always present, even without --libafl
-//        args.push("-fsanitize-coverage=trace-pc-guard,trace-cmp".into());
-        // args.push("-fsanitize=dataflow".into());
-        // args.push("-dfsan-conditional-callbacks=1".into());
-
         let mut cc = ClangWrapper::new();
 
         #[cfg(any(target_os = "linux", target_vendor = "apple"))]

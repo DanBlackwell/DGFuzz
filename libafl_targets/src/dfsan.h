@@ -2,8 +2,10 @@
 #define LIBAFL_DFSAN_H
 
 #include <stddef.h>
+#include <stdint.h>
 
-unsigned char dfsan_labels_following_edge[1024 * 1024] = {0};
+uint64_t LAST_SEEN_EDGE = 0;
+unsigned char dfsan_labels_following_edge[2 * 1024 * 1024] = {0};
 
 void __dfsan_init(void);
 

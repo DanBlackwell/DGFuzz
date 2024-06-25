@@ -1,8 +1,6 @@
 #include "dfsan.h"
 #include <sanitizer/dfsan_interface.h>
 
-unsigned int last_edge = 0;
-
 extern int LLVMFuzzerTestOneInput(uint8_t *Data, size_t Size);
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin);
 
@@ -24,12 +22,15 @@ void __tag_input_with_labels(
         dfsan_set_label(labels[i], input + label_start_offsets[i], label_block_len[i]);
     }
 
+    memset(dfsan_labels_following_edge, 0, sizeof(dfsan_labels_following_edge));
+
     printf("will call LLVMFuzzer... at %p\n", LLVMFuzzerTestOneInput);
     LLVMFuzzerTestOneInput(input, input_len);
+    dfsan_set_label(0, input, input_len);
 }
 
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
-    printf("hit DFSAN callback, have label %hu\n", label);
-    dfsan_labels_following_edge[last_edge] = label;
+    printf("hit DFSAN callback (last edge: %lu), have label %hu\n", LAST_SEEN_EDGE, label);
+    dfsan_labels_following_edge[LAST_SEEN_EDGE] = label;
 }

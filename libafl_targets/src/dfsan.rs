@@ -145,7 +145,7 @@ where
     tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
 
     let mut labels_for_edge = HashMap::new();
-    unsafe{
+    unsafe {
         for i in 0..dfsan_labels_following_edge.len() {
             if dfsan_labels_following_edge[i] != 0 {
                 let the_byte = dfsan_labels_following_edge[i];
@@ -155,6 +155,7 @@ where
                         labels.push(bit + 1);
                     }
                 }
+                println!("for label {:x}, got {:?}", the_byte, labels);
                 labels_for_edge.insert(i, labels);
             }
         }
