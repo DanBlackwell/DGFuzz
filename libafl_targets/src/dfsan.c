@@ -30,6 +30,6 @@ void __tag_input_with_labels(
 
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
-    printf("hit DFSAN callback\n");
+    printf("hit DFSAN callback, have label %hu\n", label);
     dfsan_labels_following_edge[last_edge] = label;
 }

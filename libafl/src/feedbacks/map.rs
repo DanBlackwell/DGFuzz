@@ -981,11 +981,11 @@ where
 
         let initial = observer.initial();
 
-        print!("listing edges: ");
-        for (i, item) in observer.as_iter().copied().enumerate().filter(|(_,x)| *x != initial) {
-            print!("{i}: {:?}, ", item);
-        }
-        println!("");
+        // print!("listing edges: ");
+        // for (i, item) in observer.as_iter().copied().enumerate().filter(|(_,x)| *x != initial) {
+        //     print!("{i}: {:?}, ", item);
+        // }
+        // println!("");
 
         if let Some(novelties) = self.novelties.as_mut() {
             novelties.clear();

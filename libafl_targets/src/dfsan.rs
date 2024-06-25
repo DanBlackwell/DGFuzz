@@ -137,9 +137,11 @@ where
 //    }
 //    mark_feature_time!(state, PerfFeature::TargetExecution);
 
+    println!("entered run_and_collect_labels");
     let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
     let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
     let mut input_bytes = input.bytes().to_owned();
+    println!("calling tag_input_with_labels({:?}, {:?}, {:?})", input_bytes, start_offsets, lens);
     tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
 
     let mut labels_for_edge = HashMap::new();
@@ -209,6 +211,7 @@ where
         state: &mut E::State,
         manager: &mut EM,
     ) -> Result<(), Error> {
+        println!("Performing dataflowstage");
         let idx = state.corpus().current().unwrap();
         let tc = state.corpus().get(idx).unwrap().borrow();
         let input = tc.input().as_ref().unwrap();
@@ -228,6 +231,7 @@ where
 
         let input = input.clone();
         drop(tc);
+        println!("inserting labels: {:?}", labels);
 
         let labels_for_edge = run_and_collect_labels(fuzzer, executor, state, manager, &input, &labels)?;
 
