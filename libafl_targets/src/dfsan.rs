@@ -22,10 +22,13 @@ extern "C" {
     pub static mut dfsan_labels_following_edge: [c_uchar; 1024 * 1024];
 
     /// set the relevant callback(s) for DFSan
+    #[link_name = "__dfsan_init.dfsan"]
     fn __dfsan_init();
     /// tag the input with labels 
+    #[link_name = "__tag_input_with_labels.dfsan"]
     fn __tag_input_with_labels(
         input: *mut c_uchar, 
+        input_len: size_t,
         label_start_offsets: *const size_t, 
         label_block_len: *const size_t, 
         num_labels: c_int
@@ -36,10 +39,12 @@ pub fn dfsan_init() {
     unsafe { __dfsan_init(); }
 }
 
+/// Note this currently execs the program too
 pub fn tag_input_with_labels(input: &mut [u8], label_start_offsets: &[usize], label_block_len: &[usize]) {
     unsafe{ 
         __tag_input_with_labels(
             input.as_mut_ptr(), 
+            input.len(),
             label_start_offsets.as_ptr(), 
             label_block_len.as_ptr(), 
             label_start_offsets.len() as i32
@@ -103,34 +108,39 @@ where
     E::State: HasCorpus + HasSolutions + HasClientPerfMonitor + HasExecutions,
     E::Input: HasBytesVec,
 {
-    let mut harness = |input: &E::Input| {
-        let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
-        let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
-        let mut input_bytes = input.bytes().to_owned();
-        tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
+//    let mut harness = |input: &E::Input| {
+//        let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
+//        let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
+//        let mut input_bytes = input.bytes().to_owned();
+//        tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
+//
+//        unsafe {
+//            libfuzzer_test_one_input(&input_bytes);
+//        }
+//
+//        ExitKind::Ok
+//    };
+//
+//    let mut executor =
+//        InProcessExecutor::new(&mut harness, tuple_list!(), fuzzer, state, manager)?;
+//
+//    start_timer!(state);
+//    executor.observers_mut().pre_exec_all(state, input)?;
+//    mark_feature_time!(state, PerfFeature::PreExecObservers);
+//
+//    start_timer!(state);
+//    let kind = executor.run_target(fuzzer, state, manager, input)?;
+//    if kind != ExitKind::Ok {
+//        return Err(Error::illegal_state(
+//            "Encountered a crash while performing dataflow cmplog.",
+//        ));
+//    }
+//    mark_feature_time!(state, PerfFeature::TargetExecution);
 
-        unsafe {
-            libfuzzer_test_one_input(&input_bytes);
-        }
-
-        ExitKind::Ok
-    };
-
-    let mut executor =
-        InProcessExecutor::new(&mut harness, tuple_list!(), fuzzer, state, manager)?;
-
-    start_timer!(state);
-    executor.observers_mut().pre_exec_all(state, input)?;
-    mark_feature_time!(state, PerfFeature::PreExecObservers);
-
-    start_timer!(state);
-    let kind = executor.run_target(fuzzer, state, manager, input)?;
-    if kind != ExitKind::Ok {
-        return Err(Error::illegal_state(
-            "Encountered a crash while performing dataflow cmplog.",
-        ));
-    }
-    mark_feature_time!(state, PerfFeature::TargetExecution);
+    let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
+    let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
+    let mut input_bytes = input.bytes().to_owned();
+    tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
 
     let mut labels_for_edge = HashMap::new();
     unsafe{
@@ -148,13 +158,13 @@ where
         }
     }
 
-    start_timer!(state);
-    executor
-        .observers_mut()
-        .post_exec_all(state, input, &kind)?;
-    mark_feature_time!(state, PerfFeature::PostExecObservers);
+    // start_timer!(state);
+    // executor
+    //     .observers_mut()
+    //     .post_exec_all(state, input, &kind)?;
+    // mark_feature_time!(state, PerfFeature::PostExecObservers);
 
-    *state.executions_mut() += 1;
+    // *state.executions_mut() += 1;
 
     Ok(labels_for_edge)
 }
@@ -168,6 +178,7 @@ pub struct DataflowStage<EM, E, Z> {
 
 impl<EM, E, Z> DataflowStage<EM, E, Z> {
     pub fn new() -> Self {
+        dfsan_init();
         DataflowStage { phantom: PhantomData }
     }
 }

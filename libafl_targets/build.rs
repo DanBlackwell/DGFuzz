@@ -61,9 +61,14 @@ fn main() {
         println!("cargo:rerun-if-changed=src/dfsan.c");
         println!("cargo:rerun-if-changed=src/dfsan.h");
         cc::Build::new()
+            // Enable PIE
             .include("/usr/lib/llvm-15/lib/clang/15.0.7/include/")
             .file(src_dir.join("dfsan.c"))
+            .flag("-fsanitize=dataflow")
+            // .flag_if_supported("-fPIC")
+            // .flag_if_supported("-pie")
             .compile("dfsan");
+
     }
 
     #[cfg(feature = "common")]

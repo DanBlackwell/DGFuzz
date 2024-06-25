@@ -591,16 +591,16 @@ where
             let meta = MapIndexesMetadata::new(indices);
             testcase.add_metadata(meta);
 
-//            print!("Filled in history_map: [");
-//            for (i, value) in history_map
-//                .iter()
-//                .copied()
-//                .enumerate()
-//                .filter(|(_, value)| *value != initial)
-//            {
-//                print!("({}, {:?}), ", i, history_map[i]);
-//            }
-//            println!("]");
+        //    print!("Filled in history_map: [");
+        //    for (i, value) in history_map
+        //        .iter()
+        //        .copied()
+        //        .enumerate()
+        //        .filter(|(_, value)| *value != initial)
+        //    {
+        //        print!("({}, {:?}), ", i, history_map[i]);
+        //    }
+        //    println!("]");
 
         } else {
             for (i, value) in observer
@@ -981,11 +981,11 @@ where
 
         let initial = observer.initial();
 
-        // print!("listing edges: ");
-        // for (i, item) in observer.as_iter().copied().enumerate().filter(|(_,x)| *x != initial) {
-        //     print!("{i}: {:?}, ", item);
-        // }
-        // println!("");
+        print!("listing edges: ");
+        for (i, item) in observer.as_iter().copied().enumerate().filter(|(_,x)| *x != initial) {
+            print!("{i}: {:?}, ", item);
+        }
+        println!("");
 
         if let Some(novelties) = self.novelties.as_mut() {
             novelties.clear();

@@ -18,6 +18,8 @@ pub fn main() {
 
         // Must be always present, even without --libafl
 //        args.push("-fsanitize-coverage=trace-pc-guard,trace-cmp".into());
+        // args.push("-fsanitize=dataflow".into());
+        // args.push("-dfsan-conditional-callbacks=1".into());
 
         let mut cc = ClangWrapper::new();
 
@@ -25,14 +27,13 @@ pub fn main() {
         cc.add_pass(LLVMPasses::AutoTokens);
 
         if let Some(code) = cc
+            .dont_optimize()
             .cpp(is_cpp)
             // silence the compiler wrapper output, needed for some configure scripts.
             .silence(true)
             // add arguments only if --libafl or --libafl-no-link are present
             .need_libafl_arg(true)
             .parse_args(&args)
-            .add_arg("-fsanitize=dataflow")
-            .add_arg("-dfsan-conditional-callbacks")
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, "fuzzbench")
             .add_pass(LLVMPasses::SanCovWithCFG)

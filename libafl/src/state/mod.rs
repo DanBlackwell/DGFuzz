@@ -725,12 +725,15 @@ where
         loop {
             match self.next_file() {
                 Ok(path) => {
+                    println!("Loading file {:?}", &path);
                     log::info!("Loading file {:?} ...", &path);
                     let input = loader(fuzzer, self, &path)?;
                     if forced {
                         let _: CorpusId = fuzzer.add_input(self, executor, manager, input)?;
                     } else {
+                        println!("evaluating {:?}", &path);
                         let (res, _) = fuzzer.evaluate_input(self, executor, manager, input)?;
+                        println!("evaluated {:?}, result: {:?}", &path, res);
                         if res == ExecuteInputResult::None {
                             log::warn!("File {:?} was not interesting, skipped.", &path);
                         }

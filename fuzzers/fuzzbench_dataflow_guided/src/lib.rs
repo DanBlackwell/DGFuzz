@@ -12,6 +12,7 @@ use std::{
     io::{self, Read, Write},
     path::PathBuf,
     process,
+    ffi::c_int
 };
 
 use clap::{Arg, Command};
@@ -58,6 +59,11 @@ use libafl_targets::{
 #[cfg(unix)]
 use nix::{self, unistd::dup};
 
+#[allow(non_snake_case)]
+extern "C" {
+    fn LLVMFuzzerTestOneInput(data: *const u8, len: usize) -> c_int;
+}
+
 /// The fuzzer main (as `no_mangle` C function)
 #[no_mangle]
 pub extern "C" fn libafl_main() {
@@ -93,12 +99,12 @@ pub extern "C" fn libafl_main() {
                 .long("cfg_file")
                 .help("The file to read Control Flow Graph from"),
         )
-        .arg(
-            Arg::new("dfsan_binary")
-                .short('d')
-                .long("dfsan_binary")
-                .help("Path of the executable compiled with DFSan")
-        )
+        // .arg(
+        //     Arg::new("dfsan_binary")
+        //         .short('d')
+        //         .long("dfsan_binary")
+        //         .help("Path of the executable compiled with DFSan")
+        // )
         .arg(
             Arg::new("logfile")
                 .short('l')
@@ -175,9 +181,9 @@ pub extern "C" fn libafl_main() {
 
     let logfile = PathBuf::from(res.get_one::<String>("logfile").unwrap().to_string());
 
-    let dfsan_binary = PathBuf::from(
-        res.get_one::<String>("dfsan_binary").unwrap().to_string()
-    );
+    // let dfsan_binary = PathBuf::from(
+    //     res.get_one::<String>("dfsan_binary").unwrap().to_string()
+    // );
 
     let timeout = Duration::from_millis(
         res.get_one::<String>("timeout")
@@ -344,7 +350,11 @@ fn fuzz(
     let mut harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-        libfuzzer_test_one_input(buf);
+
+        unsafe{
+            LLVMFuzzerTestOneInput(buf.as_ptr(), buf.len());
+        }
+        // libfuzzer_test_one_input(buf);
         ExitKind::Ok
     };
 
@@ -431,11 +441,11 @@ fn fuzz(
     // Remove target output (logs still survive)
     #[cfg(unix)]
     {
-        let null_fd = file_null.as_raw_fd();
-        dup2(null_fd, io::stdout().as_raw_fd())?;
-        if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
-            dup2(null_fd, io::stderr().as_raw_fd())?;
-        }
+        // let null_fd = file_null.as_raw_fd();
+        // dup2(null_fd, io::stdout().as_raw_fd())?;
+        // if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
+        //     dup2(null_fd, io::stderr().as_raw_fd())?;
+        // }
     }
     // reopen file to make sure we're at the end
     log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);

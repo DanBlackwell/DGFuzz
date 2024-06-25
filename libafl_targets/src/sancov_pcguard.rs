@@ -23,6 +23,7 @@ static mut UNUSED_GUARD_INDEXES: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new(
 #[no_mangle]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     let pos = *guard as usize;
+    println!("called __sanitizer_cov_trace_pc_guard {pos}");
     //if !seen_guards.contains(&(pos as u32)) {
     //    panic!("ERROR: saw a guard {pos} that was not seen in the init???");
     //}
