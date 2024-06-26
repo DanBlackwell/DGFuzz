@@ -708,7 +708,17 @@ impl ControlFlowGraph {
         input_coverage_map_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>
     ) -> (HashSet<(usize, usize)>, HashSet<String>) {
+        self.get_all_neighbours_upto_depth(input_coverage_map_indexes, all_coverage_map_indexes, 99999)
+    }
 
+    /// Return a set of all indexes reachable from the list of `coverage_map_indexes` and the set
+    /// of called functions
+    pub fn get_all_neighbours_upto_depth(
+        &mut self, 
+        input_coverage_map_indexes: &[usize],
+        all_coverage_map_indexes: &HashSet<usize>,
+        max_depth: usize,
+    ) -> (HashSet<(usize, usize)>, HashSet<String>) {
         let mut dupes = vec![];
         for idx in input_coverage_map_indexes {
             if self.duplicate_cov_map_idxs.contains(&CoverageMapIdx(*idx as u32)) {
@@ -736,6 +746,10 @@ impl ControlFlowGraph {
 
             if to_explore >= 1_000_000 {
                 // can't follow an indirect call...
+                continue;
+            }
+
+            if depth > max_depth {
                 continue;
             }
 
@@ -815,5 +829,82 @@ impl ControlFlowGraph {
         }
 
         called
+    }
+
+     /// Return a set of all indexes reachable from the list of `coverage_map_indexes` and the set
+    /// of called functions
+    pub fn get_all_edges_with_direct_neighbours(
+        &mut self, 
+        input_coverage_map_indexes: &[usize],
+        all_coverage_map_indexes: &HashSet<usize>,
+    ) -> Vec<usize> {
+        let mut dupes = vec![];
+        for idx in input_coverage_map_indexes {
+            if self.duplicate_cov_map_idxs.contains(&CoverageMapIdx(*idx as u32)) {
+                dupes.push(*idx);
+            }
+        }
+        if dupes.len() > 0 {
+            println!("Found duplicate coverage map indexes: {:?}", dupes);
+        }
+
+        // set any indexes we've already covered...
+        let mut queue = VecDeque::new();
+        for &idx in input_coverage_map_indexes {
+            queue.push_back(idx);
+        }
+
+        let mut edges_with_neighbours = vec![];
+
+        while let Some(to_explore) = queue.pop_front() {
+            if to_explore >= 1_000_000 {
+                // can't follow an indirect call...
+                continue;
+            }
+
+            {
+                let bb = &self.all_edges[to_explore];
+
+                if let Some(func) = &bb.is_first_cov_map_block_in_function {
+                    let func = func.to_owned();
+                    if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
+                        if !neighbours.is_empty() {
+                            edges_with_neighbours.push(to_explore);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+
+            {
+                let bb = &self.all_edges[to_explore];
+
+                // Can't make this assertion as we may have a basic block which contains only
+                // instrumented instructions
+                for func in bb.called_funcs.clone() {
+                    if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
+                        if !neighbours.is_empty() {
+                            edges_with_neighbours.push(to_explore);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            let bb = &self.all_edges[to_explore];
+
+            if !bb.instrumented_instructions_cov_map_idxs.is_empty() || !bb.num_indirect_calls > 0 {
+                edges_with_neighbours.push(to_explore);
+                continue;
+            }
+
+            if !self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned().is_empty() {
+                edges_with_neighbours.push(to_explore);
+                continue;
+            }
+        }
+
+        edges_with_neighbours
     }
 }

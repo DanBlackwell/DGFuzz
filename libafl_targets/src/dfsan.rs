@@ -11,7 +11,7 @@ use libafl_bolts::{rands::Rand, tuples::{tuple_list, MatchName}, AsSlice};
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    corpus::{Corpus, HasCurrentCorpusIdx}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, inputs::{HasBytesVec, HasTargetBytes}, mark_feature_time, observers::{MapObserver, ObserversTuple}, prelude::{HasClientPerfMonitor, HasExecutions, HasSolutions}, stages::Stage, start_timer, state::{HasCorpus, HasMetadata, HasRand, UsesState}, Error, HasObjective
+    corpus::{Corpus, HasCurrentCorpusIdx}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{HasBytesVec, HasTargetBytes}, mark_feature_time, observers::{MapObserver, ObserversTuple}, prelude::{HasClientPerfMonitor, HasExecutions, HasSolutions}, stages::Stage, start_timer, state::{HasCorpus, HasMetadata, HasRand, UsesState}, Error, HasObjective
 };
 
 extern crate libc;
@@ -52,38 +52,13 @@ pub fn tag_input_with_labels(input: &mut [u8], label_start_offsets: &[usize], la
     }
 }
 
-
-// Bigger range is better
-#[derive(Debug, PartialEq, Eq)]
-struct Bigger(Range<usize>);
-
-impl PartialOrd for Bigger {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+#[derive(Clone,Debug,Serialize,Deserialize)]
+struct TestcaseDataflowMetadata {
+    /// Map from edge index to bytes that the conditional afterwards depends on
+    pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>
 }
 
-impl Ord for Bigger {
-    fn cmp(&self, other: &Bigger) -> Ordering {
-        self.0.len().cmp(&other.0.len())
-    }
-}
-
-// Earlier range is better
-#[derive(Debug, PartialEq, Eq)]
-struct Earlier(Range<usize>);
-
-impl PartialOrd for Earlier {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Earlier {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other.0.start.cmp(&self.0.start)
-    }
-}
+libafl_bolts::impl_serdeany!(TestcaseDataflowMetadata);
 
 #[derive(Copy,Clone,Debug)]
 struct DFSanLabelInfo {
@@ -147,12 +122,13 @@ impl<EM, E, Z> DataflowStage<EM, E, Z> {
         Ok(labels_for_edge)
     }
 
-    fn populate_taint_dependencies(
+    fn get_bytes_depended_on_by_edges(
         fuzzer: &mut Z,
-        executor: &mut E, // don't need the *main* executor for tracing
+        executor: &mut E,
         state: &mut E::State,
         manager: &mut EM,
-    ) -> Result<(), Error>
+        required_edges: &[usize]
+    ) -> Result<HashMap<usize, Vec<usize>>, Error>
     where
         EM: UsesState<State = E::State> + EventFirer + EventRestarter,
         E: HasObservers + Executor<EM, Z>,
@@ -183,10 +159,9 @@ impl<EM, E, Z> DataflowStage<EM, E, Z> {
             labels
         }
     
-        let required_edges: Vec<usize> = (0..32).collect();
         let mut bytes_depended_on_by_edge = {
             let mut tmp = HashMap::new();
-            for e in &required_edges { tmp.insert(*e, vec![]); }
+            for e in required_edges { tmp.insert(*e, vec![]); }
             tmp
         };
     
@@ -214,7 +189,7 @@ impl<EM, E, Z> DataflowStage<EM, E, Z> {
     
         println!("bytes depended on by edge: {:?}", bytes_depended_on_by_edge);
 
-        Ok(())
+        Ok(bytes_depended_on_by_edge)
     }
 
 }
@@ -246,61 +221,37 @@ where
         manager: &mut EM,
     ) -> Result<(), Error> {
         println!("Performing dataflowstage");
-        Self::populate_taint_dependencies(fuzzer, executor, state, manager)?;
-        // let input = {
-        //     let idx = state.corpus().current().unwrap();
-        //     let tc = state.corpus().get(idx).unwrap().borrow();
-        //     tc.input().as_ref().unwrap().clone()
-        // };
 
-        // fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
-        //     let mut labels = vec![];
-        //     if range.len() > 7 {
-        //         for idx in 0..8 {
-        //             let start_offset = ((idx as f64) / 8f64 * (range.len() as f64)).floor() as usize;
-        //             let end_offset = ((idx as f64 + 1f64) / 8f64 * (range.len() as f64)).floor() as usize;
-        //             let len = end_offset - start_offset;
-        //             labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + start_offset, len });
-        //         }
-        //     } else {
-        //         for idx in 0..range.len() {
-        //             labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + idx, len: 1 });
-        //         }
-        //     }
-        //     labels
-        // }
+        let idx = state.corpus().current().unwrap();
+        let tc = state.corpus().get(idx).unwrap().borrow();
+        // Compute the metadata if not present
+        if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
+            let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
+            let covered_indexes = covered_meta.list.clone();
+            drop(tc);
 
-        // let required_edges: Vec<usize> = (0..32).collect();
-        // let mut bytes_depended_on_by_edge = {
-        //     let mut tmp = HashMap::new();
-        //     for e in &required_edges { tmp.insert(*e, vec![]); }
-        //     tmp
-        // };
+            let full_neighbours_meta = state
+                .metadata::<MapNeighboursFeedbackMetadata>()
+                .unwrap();
+            let covered_blocks = full_neighbours_meta.covered_blocks.clone();
 
-        // let mut queue = required_edges.iter()
-        //     .map(|&e| (e, 0..input.bytes().len()))
-        //     .collect::<Vec<(usize, Range<usize>)>>();
+            let parents_of_direct_neighbours: Vec<usize> = {
+                let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
+                cfg_metadata.get_all_edges_with_direct_neighbours(&covered_indexes, &covered_blocks)
+            };
 
-        // // Collect up a list of bytes that each edge depends on; these may be disjoint 
-        // // e.g. if (data[0] + data[3] - data[5] == 0)
-        // while let Some((edge_idx, byte_range)) = queue.pop() {
-        //     let label_infos = get_labels_for_range(byte_range);
-        //     let labels_for_edge = self.run_and_collect_labels(fuzzer, executor, state, manager, &input, &label_infos)?;
-        //     if let Some(labels) = labels_for_edge.get(&edge_idx) {
-        //         for &label in labels {
-        //             let linfo = label_infos[(label as usize) - 1];
-        //             if linfo.len == 1 {
-        //                 bytes_depended_on_by_edge.get_mut(&edge_idx).unwrap()
-        //                     .push(linfo.start_pos);
-        //             } else {
-        //                 queue.push((edge_idx, linfo.start_pos..(linfo.start_pos + linfo.len)));
-        //             }
-        //         }
-        //     }
-        // }
+            let bytes_depended_on_by_edge = Self::get_bytes_depended_on_by_edges(
+                fuzzer, executor, state, manager, &parents_of_direct_neighbours)?;
 
-        // println!("bytes depended on by edge: {:?}", bytes_depended_on_by_edge);
+            // println!("corpus_idx {:?}; bytes depended on by edge: {:?}, parents_of_direct_n {:?}", idx, bytes_depended_on_by_edge, parents_of_direct_neighbours);
+            
+            let meta = TestcaseDataflowMetadata { bytes_depended_on_by_edge };
+            let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+            tc.add_metadata(meta);
+        }
 
+        let tc = state.corpus().get(idx).unwrap().borrow();
+        let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
 
         Ok(())
     }
