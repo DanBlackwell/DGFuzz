@@ -92,48 +92,6 @@ struct DFSanLabelInfo {
     len: usize
 }
 
-/// return a hashmap giving a Vec of labels for each edge
-fn run_and_collect_labels<E, EM, Z>(
-    fuzzer: &mut Z,
-    _executor: &mut E,
-    state: &mut E::State,
-    manager: &mut EM,
-    input: &E::Input,
-    labels: &Vec<DFSanLabelInfo>,
-) -> Result<HashMap<usize, Vec<u8>>, Error>
-where
-    E: UsesState,
-    EM: EventFirer<State = E::State> + EventRestarter,
-    Z: UsesState<State = E::State> + HasObjective,
-    E::State: HasCorpus + HasSolutions + HasClientPerfMonitor + HasExecutions,
-    E::Input: HasBytesVec,
-{
-    println!("entered run_and_collect_labels");
-    let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
-    let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
-    let mut input_bytes = input.bytes().to_owned();
-    println!("calling tag_input_with_labels(len: {} {:?}, {:?}, {:?})", input_bytes.len(), input_bytes, start_offsets, lens);
-    tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
-
-    let mut labels_for_edge = HashMap::new();
-    unsafe {
-        for i in 0..dfsan_labels_following_edge.len() {
-            if dfsan_labels_following_edge[i] != 0 {
-                let the_byte = dfsan_labels_following_edge[i];
-                let mut labels = vec![];
-                for bit in 0..8 {
-                    if (the_byte >> bit) & 1 == 1 {
-                        labels.push(bit + 1);
-                    }
-                }
-                labels_for_edge.insert(i, labels);
-            }
-        }
-    }
-
-    Ok(labels_for_edge)
-}
-
 /// The mutational stage using power schedules
 #[derive(Clone, Debug)]
 pub struct DataflowStage<EM, E, Z> {
@@ -146,6 +104,119 @@ impl<EM, E, Z> DataflowStage<EM, E, Z> {
         dfsan_init();
         DataflowStage { phantom: PhantomData }
     }
+
+    /// return a hashmap giving a Vec of labels for each edge
+    fn run_and_collect_labels(
+        fuzzer: &mut Z,
+        _executor: &mut E,
+        state: &mut E::State,
+        manager: &mut EM,
+        input: &E::Input,
+        labels: &Vec<DFSanLabelInfo>,
+    ) -> Result<HashMap<usize, Vec<u8>>, Error>
+    where
+        E: UsesState,
+        EM: EventFirer<State = E::State> + EventRestarter,
+        Z: UsesState<State = E::State> + HasObjective,
+        E::State: HasCorpus + HasSolutions + HasClientPerfMonitor + HasExecutions,
+        E::Input: HasBytesVec,
+    {
+        println!("entered run_and_collect_labels");
+        let start_offsets = labels.iter().map(|l| l.start_pos).collect::<Vec<usize>>();
+        let lens = labels.iter().map(|l| l.len).collect::<Vec<usize>>();
+        let mut input_bytes = input.bytes().to_owned();
+        println!("calling tag_input_with_labels(len: {} {:?}, {:?}, {:?})", input_bytes.len(), input_bytes, start_offsets, lens);
+        tag_input_with_labels(&mut input_bytes, &start_offsets, &lens);
+
+        let mut labels_for_edge = HashMap::new();
+        unsafe {
+            for i in 0..dfsan_labels_following_edge.len() {
+                if dfsan_labels_following_edge[i] != 0 {
+                    let the_byte = dfsan_labels_following_edge[i];
+                    let mut labels = vec![];
+                    for bit in 0..8 {
+                        if (the_byte >> bit) & 1 == 1 {
+                            labels.push(bit + 1);
+                        }
+                    }
+                    labels_for_edge.insert(i, labels);
+                }
+            }
+        }
+
+        Ok(labels_for_edge)
+    }
+
+    fn populate_taint_dependencies(
+        fuzzer: &mut Z,
+        executor: &mut E, // don't need the *main* executor for tracing
+        state: &mut E::State,
+        manager: &mut EM,
+    ) -> Result<(), Error>
+    where
+        EM: UsesState<State = E::State> + EventFirer + EventRestarter,
+        E: HasObservers + Executor<EM, Z>,
+        E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
+        E::Input: HasBytesVec,
+        Z: UsesState<State = E::State> + HasObjective,
+    {
+        let input = {
+            let idx = state.corpus().current().unwrap();
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            tc.input().as_ref().unwrap().clone()
+        };
+    
+        fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
+            let mut labels = vec![];
+            if range.len() > 7 {
+                for idx in 0..8 {
+                    let start_offset = ((idx as f64) / 8f64 * (range.len() as f64)).floor() as usize;
+                    let end_offset = ((idx as f64 + 1f64) / 8f64 * (range.len() as f64)).floor() as usize;
+                    let len = end_offset - start_offset;
+                    labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + start_offset, len });
+                }
+            } else {
+                for idx in 0..range.len() {
+                    labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + idx, len: 1 });
+                }
+            }
+            labels
+        }
+    
+        let required_edges: Vec<usize> = (0..32).collect();
+        let mut bytes_depended_on_by_edge = {
+            let mut tmp = HashMap::new();
+            for e in &required_edges { tmp.insert(*e, vec![]); }
+            tmp
+        };
+    
+        let mut queue = required_edges.iter()
+            .map(|&e| (e, 0..input.bytes().len()))
+            .collect::<Vec<(usize, Range<usize>)>>();
+    
+        // Collect up a list of bytes that each edge depends on; these may be disjoint 
+        // e.g. if (data[0] + data[3] - data[5] == 0)
+        while let Some((edge_idx, byte_range)) = queue.pop() {
+            let label_infos = get_labels_for_range(byte_range);
+            let labels_for_edge = Self::run_and_collect_labels(fuzzer, executor, state, manager, &input, &label_infos)?;
+            if let Some(labels) = labels_for_edge.get(&edge_idx) {
+                for &label in labels {
+                    let linfo = label_infos[(label as usize) - 1];
+                    if linfo.len == 1 {
+                        bytes_depended_on_by_edge.get_mut(&edge_idx).unwrap()
+                            .push(linfo.start_pos);
+                    } else {
+                        queue.push((edge_idx, linfo.start_pos..(linfo.start_pos + linfo.len)));
+                    }
+                }
+            }
+        }
+    
+        println!("bytes depended on by edge: {:?}", bytes_depended_on_by_edge);
+
+        Ok(())
+    }
+
 }
 
 impl<EM, E, Z> UsesState for DataflowStage<EM, E, Z>
@@ -175,65 +246,61 @@ where
         manager: &mut EM,
     ) -> Result<(), Error> {
         println!("Performing dataflowstage");
-        let input = {
-            let idx = state.corpus().current().unwrap();
-            let tc = state.corpus().get(idx).unwrap().borrow();
-            tc.input().as_ref().unwrap().clone()
-        };
+        Self::populate_taint_dependencies(fuzzer, executor, state, manager)?;
+        // let input = {
+        //     let idx = state.corpus().current().unwrap();
+        //     let tc = state.corpus().get(idx).unwrap().borrow();
+        //     tc.input().as_ref().unwrap().clone()
+        // };
 
-        fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
-            let mut labels = vec![];
-            if range.len() > 7 {
-                for idx in 0..8 {
-                    let start_offset = ((idx as f64) / 8f64 * (range.len() as f64)).floor() as usize;
-                    let end_offset = ((idx as f64 + 1f64) / 8f64 * (range.len() as f64)).floor() as usize;
-                    let len = end_offset - start_offset;
-                    labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + start_offset, len });
-                }
-            } else {
-                for idx in 0..range.len() {
-                    labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + idx, len: 1 });
-                }
-            }
-            labels
-        }
+        // fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
+        //     let mut labels = vec![];
+        //     if range.len() > 7 {
+        //         for idx in 0..8 {
+        //             let start_offset = ((idx as f64) / 8f64 * (range.len() as f64)).floor() as usize;
+        //             let end_offset = ((idx as f64 + 1f64) / 8f64 * (range.len() as f64)).floor() as usize;
+        //             let len = end_offset - start_offset;
+        //             labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + start_offset, len });
+        //         }
+        //     } else {
+        //         for idx in 0..range.len() {
+        //             labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + idx, len: 1 });
+        //         }
+        //     }
+        //     labels
+        // }
 
-        let required_edges: Vec<usize> = (0..32).collect();
-        let mut bytes_depended_on_by_edge = {
-            let mut tmp = HashMap::new();
-            for e in &required_edges { tmp.insert(*e, vec![]); }
-            tmp
-        };
+        // let required_edges: Vec<usize> = (0..32).collect();
+        // let mut bytes_depended_on_by_edge = {
+        //     let mut tmp = HashMap::new();
+        //     for e in &required_edges { tmp.insert(*e, vec![]); }
+        //     tmp
+        // };
 
-        let mut queue = required_edges.iter()
-            .map(|&e| (e, 0..input.bytes().len()))
-            .collect::<Vec<(usize, Range<usize>)>>();
+        // let mut queue = required_edges.iter()
+        //     .map(|&e| (e, 0..input.bytes().len()))
+        //     .collect::<Vec<(usize, Range<usize>)>>();
 
-        // Collect up a list of bytes that each edge depends on; these may be disjoint 
-        // e.g. if (data[0] + data[3] - data[5] == 0)
-        while let Some((edge_idx, byte_range)) = queue.pop() {
-            let label_infos = get_labels_for_range(byte_range);
-            let labels_for_edge = run_and_collect_labels(fuzzer, executor, state, manager, &input, &label_infos)?;
-            if let Some(labels) = labels_for_edge.get(&edge_idx) {
-                for &label in labels {
-                    let linfo = label_infos[(label as usize) - 1];
-                    if linfo.len == 1 {
-                        bytes_depended_on_by_edge.get_mut(&edge_idx).unwrap()
-                            .push(linfo.start_pos);
-                    } else {
-                        queue.push((edge_idx, linfo.start_pos..(linfo.start_pos + linfo.len)));
-                    }
-                }
-            }
-        }
+        // // Collect up a list of bytes that each edge depends on; these may be disjoint 
+        // // e.g. if (data[0] + data[3] - data[5] == 0)
+        // while let Some((edge_idx, byte_range)) = queue.pop() {
+        //     let label_infos = get_labels_for_range(byte_range);
+        //     let labels_for_edge = self.run_and_collect_labels(fuzzer, executor, state, manager, &input, &label_infos)?;
+        //     if let Some(labels) = labels_for_edge.get(&edge_idx) {
+        //         for &label in labels {
+        //             let linfo = label_infos[(label as usize) - 1];
+        //             if linfo.len == 1 {
+        //                 bytes_depended_on_by_edge.get_mut(&edge_idx).unwrap()
+        //                     .push(linfo.start_pos);
+        //             } else {
+        //                 queue.push((edge_idx, linfo.start_pos..(linfo.start_pos + linfo.len)));
+        //             }
+        //         }
+        //     }
+        // }
 
-        println!("bytes depended on by edge: {:?}", bytes_depended_on_by_edge);
+        // println!("bytes depended on by edge: {:?}", bytes_depended_on_by_edge);
 
-        // println!("inserting labels: {:?}", labels);
-
-        // let labels_for_edge = run_and_collect_labels(fuzzer, executor, state, manager, &input, &labels)?;
-
-        // println!("labels for edge: {:?}", labels_for_edge);
 
         Ok(())
     }
