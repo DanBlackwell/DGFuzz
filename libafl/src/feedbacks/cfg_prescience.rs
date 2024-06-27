@@ -831,36 +831,25 @@ impl ControlFlowGraph {
         called
     }
 
-     /// Return a set of all indexes reachable from the list of `coverage_map_indexes` and the set
-    /// of called functions
-    pub fn get_all_edges_with_direct_neighbours(
+    /// Return a map from parent edges to a list of their direct neighbours (descendents)
+    pub fn get_map_from_edges_to_direct_neighbours(
         &mut self, 
         input_coverage_map_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>,
-    ) -> Vec<usize> {
-        let mut dupes = vec![];
-        for idx in input_coverage_map_indexes {
-            if self.duplicate_cov_map_idxs.contains(&CoverageMapIdx(*idx as u32)) {
-                dupes.push(*idx);
-            }
-        }
-        if dupes.len() > 0 {
-            println!("Found duplicate coverage map indexes: {:?}", dupes);
-        }
+    ) -> HashMap<usize, Vec<usize>> {
 
-        // set any indexes we've already covered...
-        let mut queue = VecDeque::new();
-        for &idx in input_coverage_map_indexes {
-            queue.push_back(idx);
-        }
+        let mut neighbours_info = HashMap::new();
 
-        let mut edges_with_neighbours = vec![];
-
-        while let Some(to_explore) = queue.pop_front() {
+        for &to_explore in input_coverage_map_indexes {
             if to_explore >= 1_000_000 {
                 // can't follow an indirect call...
                 continue;
             }
+
+            // set any indexes we've already covered...
+            let mut covered = all_coverage_map_indexes.clone();
+
+            let mut children = vec![];
 
             {
                 let bb = &self.all_edges[to_explore];
@@ -868,14 +857,14 @@ impl ControlFlowGraph {
                 if let Some(func) = &bb.is_first_cov_map_block_in_function {
                     let func = func.to_owned();
                     if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
-                        if !neighbours.is_empty() {
-                            edges_with_neighbours.push(to_explore);
-                            continue;
+                        for neighbour in neighbours {
+                            if covered.insert(neighbour.0 as usize) {
+                                children.push(neighbour.0 as usize)
+                            }
                         }
                     }
                 }
             }
-
 
             {
                 let bb = &self.all_edges[to_explore];
@@ -884,9 +873,10 @@ impl ControlFlowGraph {
                 // instrumented instructions
                 for func in bb.called_funcs.clone() {
                     if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
-                        if !neighbours.is_empty() {
-                            edges_with_neighbours.push(to_explore);
-                            continue;
+                        for neighbour in neighbours {
+                            if covered.insert(neighbour.0 as usize) {
+                                children.push(neighbour.0 as usize)
+                            }
                         }
                     }
                 }
@@ -894,17 +884,27 @@ impl ControlFlowGraph {
 
             let bb = &self.all_edges[to_explore];
 
-            if !bb.instrumented_instructions_cov_map_idxs.is_empty() || !bb.num_indirect_calls > 0 {
-                edges_with_neighbours.push(to_explore);
-                continue;
+            for instr_cov_map_idx in bb.instrumented_instructions_cov_map_idxs.clone() {
+                if covered.insert(instr_cov_map_idx.0 as usize) {
+                    children.push(instr_cov_map_idx.0 as usize);
+                }
             }
 
-            if !self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned().is_empty() {
-                edges_with_neighbours.push(to_explore);
-                continue;
+            // DO NOT add these huge index indirect calls
+            // for indirect_call_num in 0..bb.num_indirect_calls {
+
+            for successor in self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned() {
+                let map_idx = successor.0 as usize;
+                if covered.insert(map_idx) {
+                    children.push(map_idx);
+                }
+            }
+
+            if !children.is_empty() {
+                neighbours_info.insert(to_explore, children);
             }
         }
 
-        edges_with_neighbours
+        neighbours_info
     }
 }

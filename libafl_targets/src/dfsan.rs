@@ -4,7 +4,7 @@ use alloc::{
     borrow::ToOwned, collections::binary_heap::BinaryHeap, string::{String, ToString}, vec::Vec
 };
 use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, ops::Range};
-use std::collections::HashMap;
+use hashbrown::{HashMap, HashSet};
 
 use crate::libfuzzer_test_one_input;
 use libafl_bolts::{rands::Rand, tuples::{tuple_list, MatchName}, AsSlice};
@@ -54,6 +54,7 @@ pub fn tag_input_with_labels(input: &mut [u8], label_start_offsets: &[usize], la
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
 struct TestcaseDataflowMetadata {
+    pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,
     /// Map from edge index to bytes that the conditional afterwards depends on
     pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>
 }
@@ -191,7 +192,6 @@ impl<EM, E, Z> DataflowStage<EM, E, Z> {
 
         Ok(bytes_depended_on_by_edge)
     }
-
 }
 
 impl<EM, E, Z> UsesState for DataflowStage<EM, E, Z>
@@ -222,30 +222,32 @@ where
     ) -> Result<(), Error> {
         println!("Performing dataflowstage");
 
+        let full_neighbours_meta = state
+            .metadata::<MapNeighboursFeedbackMetadata>()
+            .unwrap();
+        let covered_blocks = full_neighbours_meta.covered_blocks.clone();
+
         let idx = state.corpus().current().unwrap();
         let tc = state.corpus().get(idx).unwrap().borrow();
+
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
             drop(tc);
 
-            let full_neighbours_meta = state
-                .metadata::<MapNeighboursFeedbackMetadata>()
-                .unwrap();
-            let covered_blocks = full_neighbours_meta.covered_blocks.clone();
-
-            let parents_of_direct_neighbours: Vec<usize> = {
+            let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                cfg_metadata.get_all_edges_with_direct_neighbours(&covered_indexes, &covered_blocks)
+                cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &covered_blocks)
             };
 
+            let required_edges: Vec<usize> = direct_neighbours_for_edge.keys().copied().collect();
             let bytes_depended_on_by_edge = Self::get_bytes_depended_on_by_edges(
-                fuzzer, executor, state, manager, &parents_of_direct_neighbours)?;
+                fuzzer, executor, state, manager, &required_edges)?;
 
             // println!("corpus_idx {:?}; bytes depended on by edge: {:?}, parents_of_direct_n {:?}", idx, bytes_depended_on_by_edge, parents_of_direct_neighbours);
             
-            let meta = TestcaseDataflowMetadata { bytes_depended_on_by_edge };
+            let meta = TestcaseDataflowMetadata { bytes_depended_on_by_edge, direct_neighbours_for_edge };
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
             tc.add_metadata(meta);
         }
@@ -253,329 +255,63 @@ where
         let tc = state.corpus().get(idx).unwrap().borrow();
         let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
 
+        // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
+        let required_edges = {
+            let mut req = HashSet::new();
+            for (parent, neighbours) in &df_meta.direct_neighbours_for_edge {
+                for neighbour in neighbours {
+                    if !covered_blocks.contains(neighbour) {
+                        req.insert(*parent);
+                        break;
+                    }
+                }
+            }
+            req
+        };
+
+        println!("required edges: {:?}", required_edges);
+
+        // build a vec of the values of target bytes
+        let mut target_byte_pos = HashSet::new();
+        for edge in required_edges {
+            if let Some(dependent_bytes) = df_meta.bytes_depended_on_by_edge.get(&edge) {
+                for &byte_pos in dependent_bytes {
+                    target_byte_pos.insert(byte_pos);
+                }
+            }
+        }
+
+        println!("The set of target byte pos: {:?}", target_byte_pos);
+
+        let target_bytes = {
+            let mut res = vec![];
+            let input = tc.input().as_ref().unwrap().bytes();
+            for &pos in &target_byte_pos {
+                res.push(input[pos]);
+            }
+            res
+        };
+
+        // mutate these bytes
+        // for i in 0..num {
+
+        //     let mutated = self.mutator_mut().mutate(state, &mut input, i as i32)?;
+
+        //     if mutated == MutationResult::Skipped {
+        //         continue;
+        //     }
+
+        //     // Time is measured directly the `evaluate_input` function
+        //     let (untransformed, post) = input.try_transform_into(state)?;
+        //     let (_, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+
+        //     start_timer!(state);
+        //     self.mutator_mut().post_exec(state, i as i32, corpus_idx)?;
+        //     post.post_exec(state, i as i32, corpus_idx)?;
+        //     mark_feature_time!(state, PerfFeature::MutatePostExec);
+        // }
+
+
         Ok(())
     }
 }
-
-/// Store the taint and the input
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(
-    any(not(feature = "serdeany_autoreg"), miri),
-    allow(clippy::unsafe_derive_deserialize)
-)] // for SerdeAny
-pub struct TaintMetadata {
-    input_vec: Vec<u8>,
-    ranges: Vec<Range<usize>>,
-}
-
-impl TaintMetadata {
-    #[must_use]
-    /// Constructor for taint metadata
-    pub fn new(input_vec: Vec<u8>, ranges: Vec<Range<usize>>) -> Self {
-        Self { input_vec, ranges }
-    }
-
-    /// Set input and ranges
-    pub fn update(&mut self, input: Vec<u8>, ranges: Vec<Range<usize>>) {
-        self.input_vec = input;
-        self.ranges = ranges;
-    }
-
-    #[must_use]
-    /// Getter for `input_vec`
-    pub fn input_vec(&self) -> &Vec<u8> {
-        &self.input_vec
-    }
-
-    #[must_use]
-    /// Getter for `ranges`
-    pub fn ranges(&self) -> &Vec<Range<usize>> {
-        &self.ranges
-    }
-}
-
-libafl_bolts::impl_serdeany!(TaintMetadata);
-
-// impl<EM, O, E, Z> ColorizationStage<EM, O, E, Z>
-// where
-//     EM: UsesState<State = E::State> + EventFirer,
-//     O: MapObserver,
-//     E: HasObservers + Executor<EM, Z>,
-//     E::State: HasCorpus + HasMetadata + HasRand,
-//     E::Input: HasBytesVec,
-//     Z: UsesState<State = E::State>,
-// {
-//     #[inline]
-//     #[allow(clippy::let_and_return)]
-//     fn locate_tainted_bytes(
-//         fuzzer: &mut Z,
-//         executor: &mut E,
-//         state: &mut E::State,
-//         manager: &mut EM,
-//         name: &str,
-//     ) -> Result<E::Input, Error> {
-//         let Some(corpus_idx) = state.current_corpus_idx()? else {
-//             return Err(Error::illegal_state(
-//                 "state is not currently processing a corpus index",
-//             ));
-//         };
-
-//         let mut input = state.corpus().cloned_input_for_id(corpus_idx)?;
-//         // The backup of the input
-//         let backup = input.clone();
-//         // This is the buffer we'll randomly mutate during type_replace
-//         let mut changed = input.clone();
-
-//         // input will be consumed so clone it
-//         let consumed_input = input.clone();
-
-//         // First, run orig_input once and get the original hash
-
-//         // Idea: No need to do this every time
-//         let orig_hash =
-//             Self::get_raw_map_hash_run(fuzzer, executor, state, manager, consumed_input, name)?;
-//         let changed_bytes = changed.bytes_mut();
-//         let input_len = changed_bytes.len();
-
-//         // Binary heap, pop is logN, insert is logN
-//         // We will separate this range into smaller ranges.
-//         // Keep it sorted, we want biggest ones to come first
-//         let mut ranges = BinaryHeap::new();
-//         ranges.push(Bigger(0..input_len));
-
-//         // This heap contains the smaller ranges. Changes inside them does not affect the coverage.
-//         // Keep it sorted, we want the earliest ones to come first so that it's easier to sort them
-//         let mut ok_ranges = BinaryHeap::new();
-
-//         // println!("Replaced bytes: {:#?}", changed_bytes);
-//         // Now replace with random values (This is type_replace)
-//         Self::type_replace(changed_bytes, state);
-
-//         // println!("Replaced bytes: {:#?}", changed_bytes);
-//         // What we do is now to separate the input into smaller regions
-//         // And in each small regions make sure changing those bytes in the regions does not affect the coverage
-//         for _ in 0..input_len * 2 {
-//             if let Some(b) = ranges.pop() {
-//                 // Let's try the largest one (ranges is sorted)
-//                 let r = b.0;
-//                 let range_start = r.start;
-//                 let range_end = r.end;
-//                 let copy_len = r.len();
-//                 unsafe {
-//                     buffer_copy(
-//                         input.bytes_mut(),
-//                         changed.bytes(),
-//                         range_start,
-//                         range_start,
-//                         copy_len,
-//                     );
-//                 }
-
-//                 let consumed_input = input.clone();
-//                 let changed_hash = Self::get_raw_map_hash_run(
-//                     fuzzer,
-//                     executor,
-//                     state,
-//                     manager,
-//                     consumed_input,
-//                     name,
-//                 )?;
-
-//                 if orig_hash == changed_hash {
-//                     // The change in this range is safe!
-//                     // println!("this range safe to change: {:#?}", range_start..range_end);
-
-//                     ok_ranges.push(Earlier(range_start..range_end));
-//                 } else {
-//                     // Seems like this range is too big that we can't keep the original hash anymore
-
-//                     // Revert the changes
-//                     unsafe {
-//                         buffer_copy(
-//                             input.bytes_mut(),
-//                             backup.bytes(),
-//                             range_start,
-//                             range_start,
-//                             copy_len,
-//                         );
-//                     }
-
-//                     // Add smaller range
-//                     if copy_len > 1 {
-//                         // Separate the ranges
-//                         ranges.push(Bigger(range_start..(range_start + copy_len / 2)));
-//                         ranges.push(Bigger((range_start + copy_len / 2)..range_end));
-//                     }
-//                 }
-//             } else {
-//                 break;
-//             }
-//         }
-
-//         // Now ok_ranges is a list of smaller range
-//         // Each of them should be stored into a metadata and we'll use them later in afl++ redqueen
-
-//         // let's merge ranges in ok_ranges
-//         let mut res: Vec<Range<usize>> = Vec::new();
-//         for item in ok_ranges.into_sorted_vec().into_iter().rev() {
-//             match res.last_mut() {
-//                 Some(last) => {
-//                     // Try merge
-//                     if last.end == item.0.start {
-//                         // The last one in `res` is the start of the new one
-//                         // so merge
-//                         last.end = item.0.end;
-//                     } else {
-//                         res.push(item.0);
-//                     }
-//                 }
-//                 None => {
-//                     res.push(item.0);
-//                 }
-//             }
-//         }
-
-//         if let Some(meta) = state.metadata_map_mut().get_mut::<TaintMetadata>() {
-//             meta.update(input.bytes().to_vec(), res);
-
-//             // println!("meta: {:#?}", meta);
-//         } else {
-//             let meta = TaintMetadata::new(input.bytes().to_vec(), res);
-//             state.add_metadata::<TaintMetadata>(meta);
-//         }
-
-//         Ok(input)
-//     }
-
-//     #[must_use]
-//     /// Creates a new [`ColorizationStage`]
-//     pub fn new(map_observer_name: &O) -> Self {
-//         Self {
-//             map_observer_name: map_observer_name.name().to_string(),
-//             phantom: PhantomData,
-//         }
-//     }
-
-//     // Run the target and get map hash but before hitcounts's post_exec is used
-//     fn get_raw_map_hash_run(
-//         fuzzer: &mut Z,
-//         executor: &mut E,
-//         state: &mut E::State,
-//         manager: &mut EM,
-//         input: E::Input,
-//         name: &str,
-//     ) -> Result<usize, Error> {
-//         executor.observers_mut().pre_exec_all(state, &input)?;
-
-//         let exit_kind = executor.run_target(fuzzer, state, manager, &input)?;
-
-//         let observer = executor
-//             .observers()
-//             .match_name::<O>(name)
-//             .ok_or_else(|| Error::key_not_found("MapObserver not found".to_string()))?;
-
-//         let hash = observer.hash() as usize;
-
-//         executor
-//             .observers_mut()
-//             .post_exec_all(state, &input, &exit_kind)?;
-
-//         // let observers = executor.observers();
-//         // fuzzer.process_execution(state, manager, input, observers, &exit_kind, true)?;
-
-//         Ok(hash)
-//     }
-
-//     /// Replace bytes with random values but following certain rules
-//     #[allow(clippy::needless_range_loop)]
-//     fn type_replace(bytes: &mut [u8], state: &mut E::State) {
-//         let len = bytes.len();
-//         for idx in 0..len {
-//             let c = match bytes[idx] {
-//                 0x41..=0x46 => {
-//                     // 'A' + 1 + rand('F' - 'A')
-//                     0x41 + 1 + state.rand_mut().below(5) as u8
-//                 }
-//                 0x61..=0x66 => {
-//                     // 'a' + 1 + rand('f' - 'a')
-//                     0x61 + 1 + state.rand_mut().below(5) as u8
-//                 }
-//                 0x30 => {
-//                     // '0' -> '1'
-//                     0x31
-//                 }
-//                 0x31 => {
-//                     // '1' -> '0'
-//                     0x30
-//                 }
-//                 0x32..=0x39 => {
-//                     // '2' + 1 + rand('9' - '2')
-//                     0x32 + 1 + state.rand_mut().below(7) as u8
-//                 }
-//                 0x47..=0x5a => {
-//                     // 'G' + 1 + rand('Z' - 'G')
-//                     0x47 + 1 + state.rand_mut().below(19) as u8
-//                 }
-//                 0x67..=0x7a => {
-//                     // 'g' + 1 + rand('z' - 'g')
-//                     0x67 + 1 + state.rand_mut().below(19) as u8
-//                 }
-//                 0x21..=0x2a => {
-//                     // '!' + 1 + rand('*' - '!');
-//                     0x21 + 1 + state.rand_mut().below(9) as u8
-//                 }
-//                 0x2c..=0x2e => {
-//                     // ',' + 1 + rand('.' - ',')
-//                     0x2c + 1 + state.rand_mut().below(2) as u8
-//                 }
-//                 0x3a..=0x40 => {
-//                     // ':' + 1 + rand('@' - ':')
-//                     0x3a + 1 + state.rand_mut().below(6) as u8
-//                 }
-//                 0x5b..=0x60 => {
-//                     // '[' + 1 + rand('`' - '[')
-//                     0x5b + 1 + state.rand_mut().below(5) as u8
-//                 }
-//                 0x7b..=0x7e => {
-//                     // '{' + 1 + rand('~' - '{')
-//                     0x7b + 1 + state.rand_mut().below(3) as u8
-//                 }
-//                 0x2b => {
-//                     // '+' -> '/'
-//                     0x2f
-//                 }
-//                 0x2f => {
-//                     // '/' -> '+'
-//                     0x2b
-//                 }
-//                 0x20 => {
-//                     // ' ' -> '\t'
-//                     0x9
-//                 }
-//                 0x9 => {
-//                     // '\t' -> ' '
-//                     0x20
-//                 }
-//                 0xd => {
-//                     // '\r' -> '\n'
-//                     0xa
-//                 }
-//                 0xa => {
-//                     // '\n' -> '\r'
-//                     0xd
-//                 }
-//                 0x0 => 0x1,
-//                 0x1 | 0xff => 0x0,
-//                 _ => {
-//                     if bytes[idx] < 32 {
-//                         bytes[idx] ^ 0x1f
-//                     } else {
-//                         bytes[idx] ^ 0x7f
-//                     }
-//                 }
-//             };
-
-//             bytes[idx] = c;
-//         }
-//     }
-// }
