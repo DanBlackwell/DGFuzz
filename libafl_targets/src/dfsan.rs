@@ -7,14 +7,15 @@ use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, ops::Range};
 use hashbrown::{HashMap, HashSet};
 
 use crate::libfuzzer_test_one_input;
-use libafl_bolts::{rands::Rand, tuples::{tuple_list, MatchName}, AsSlice};
+use libafl_bolts::{rands::Rand, tuples::{tuple_list, tuple_list_type, MatchName}, AsSlice};
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    corpus::{Corpus, HasCurrentCorpusIdx}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{HasBytesVec, HasTargetBytes}, mark_feature_time, observers::{MapObserver, ObserversTuple}, prelude::{HasClientPerfMonitor, HasExecutions, HasSolutions}, stages::Stage, start_timer, state::{HasCorpus, HasMetadata, HasRand, UsesState}, Error, HasObjective
+    corpus::{Corpus, HasCurrentCorpusIdx}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasBytesVec, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator
+    }, observers::{MapObserver, ObserversTuple}, prelude::{HasClientPerfMonitor, HasExecutions, HasSolutions}, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasMetadata, HasRand, UsesState}, Error, Evaluator, HasObjective
 };
 
-extern crate libc;
+use libc;
 use libc::{c_uchar, size_t, c_int};
 
 extern "C" {
@@ -68,16 +69,75 @@ struct DFSanLabelInfo {
     len: usize
 }
 
+/// Tuple type of the mutations that compose the Havoc mutator
+pub type HavocMutationsFixedLengthType = tuple_list_type!(
+    BitFlipMutator,
+    ByteFlipMutator,
+    ByteIncMutator,
+    ByteDecMutator,
+    ByteNegMutator,
+    ByteRandMutator,
+    ByteAddMutator,
+    WordAddMutator,
+    DwordAddMutator,
+    QwordAddMutator,
+    ByteInterestingMutator,
+    WordInterestingMutator,
+    DwordInterestingMutator,
+    BytesSetMutator,
+    BytesRandSetMutator,
+    BytesCopyMutator,
+    BytesSwapMutator,
+);
+
+/// Get the mutations that compose the Havoc mutator (only applied to single inputs)
+#[must_use]
+pub fn havoc_mutations_fixed_length() -> HavocMutationsFixedLengthType {
+    tuple_list!(
+        BitFlipMutator::new(),
+        ByteFlipMutator::new(),
+        ByteIncMutator::new(),
+        ByteDecMutator::new(),
+        ByteNegMutator::new(),
+        ByteRandMutator::new(),
+        ByteAddMutator::new(),
+        WordAddMutator::new(),
+        DwordAddMutator::new(),
+        QwordAddMutator::new(),
+        ByteInterestingMutator::new(),
+        WordInterestingMutator::new(),
+        DwordInterestingMutator::new(),
+        BytesSetMutator::new(),
+        BytesRandSetMutator::new(),
+        BytesCopyMutator::new(),
+        BytesSwapMutator::new(),
+    )
+}
+
+
 /// The mutational stage using power schedules
 #[derive(Clone, Debug)]
-pub struct DataflowStage<EM, E, Z> {
+pub struct DataflowStage<EM, E, Z> 
+// where 
+//     E: UsesState + UsesInput, 
+//     E::State: HasRand, 
+//     E::Input: HasBytesVec 
+{
+    // mutator: StdScheduledMutator<E::Input, HavocMutationsFixedLengthType, E::State>,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(E, EM, Z)>,
 }
 
-impl<EM, E, Z> DataflowStage<EM, E, Z> {
+impl<EM, E, Z> DataflowStage<EM, E, Z>
+where 
+    E: UsesState + UsesInput, 
+    E::State: HasRand, 
+    E::Input: HasBytesVec 
+{
     pub fn new() -> Self {
         dfsan_init();
+        // let mut mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
+        // DataflowStage { mutator, phantom: PhantomData }
         DataflowStage { phantom: PhantomData }
     }
 
@@ -196,7 +256,9 @@ impl<EM, E, Z> DataflowStage<EM, E, Z> {
 
 impl<EM, E, Z> UsesState for DataflowStage<EM, E, Z>
 where
-    E: UsesState,
+    E: UsesState + UsesInput,
+    E::State: HasRand,
+    E::Input: HasBytesVec
 {
     type State = E::State;
 }
@@ -207,7 +269,7 @@ where
     E: HasObservers + Executor<EM, Z>,
     E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
     E::Input: HasBytesVec,
-    Z: UsesState<State = E::State> + HasObjective,
+    Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
 {
     type Progress = (); // TODO this stage needs resume
 
@@ -250,6 +312,8 @@ where
             let meta = TestcaseDataflowMetadata { bytes_depended_on_by_edge, direct_neighbours_for_edge };
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
             tc.add_metadata(meta);
+        } else {
+            drop(tc);
         }
 
         let tc = state.corpus().get(idx).unwrap().borrow();
@@ -272,45 +336,62 @@ where
         println!("required edges: {:?}", required_edges);
 
         // build a vec of the values of target bytes
-        let mut target_byte_pos = HashSet::new();
-        for edge in required_edges {
-            if let Some(dependent_bytes) = df_meta.bytes_depended_on_by_edge.get(&edge) {
-                for &byte_pos in dependent_bytes {
-                    target_byte_pos.insert(byte_pos);
+        let mut target_byte_pos: Vec<usize> = {
+            let mut res = HashSet::new();
+            for edge in required_edges {
+                if let Some(dependent_bytes) = df_meta.bytes_depended_on_by_edge.get(&edge) {
+                    for &byte_pos in dependent_bytes {
+                        res.insert(byte_pos);
+                    }
                 }
             }
-        }
+            res.into_iter().collect()
+        };
 
         println!("The set of target byte pos: {:?}", target_byte_pos);
 
+        let original_input = tc.input().as_ref().unwrap().clone();
         let target_bytes = {
             let mut res = vec![];
-            let input = tc.input().as_ref().unwrap().bytes();
             for &pos in &target_byte_pos {
-                res.push(input[pos]);
+                res.push(original_input.bytes()[pos]);
             }
             res
         };
+        drop(tc);
+
+        let mut mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
 
         // mutate these bytes
-        // for i in 0..num {
+        for i in 0..128 {
+            let mut input = BytesInput::new(target_bytes.clone());
 
-        //     let mutated = self.mutator_mut().mutate(state, &mut input, i as i32)?;
+            start_timer!(state);
+            let mutated = mutator.mutate(state, &mut input, i)?;
+            mark_feature_time!(state, PerfFeature::Mutate);
 
-        //     if mutated == MutationResult::Skipped {
-        //         continue;
-        //     }
+            if mutated == MutationResult::Skipped {
+                continue;
+            }
 
-        //     // Time is measured directly the `evaluate_input` function
-        //     let (untransformed, post) = input.try_transform_into(state)?;
-        //     let (_, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+            let altered_bytes = input.bytes();
+            assert!(altered_bytes.len() == target_bytes.len());
 
-        //     start_timer!(state);
-        //     self.mutator_mut().post_exec(state, i as i32, corpus_idx)?;
-        //     post.post_exec(state, i as i32, corpus_idx)?;
-        //     mark_feature_time!(state, PerfFeature::MutatePostExec);
-        // }
+            let mut input = original_input.clone();
+            let bytes = input.bytes_mut();
+            for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
+                bytes[*dest_pos] = altered_bytes[arr_idx];
+            }
 
+            // Time is measured directly the `evaluate_input` function
+            let (untransformed, post) = input.try_transform_into(state)?;
+            let (_, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+
+            start_timer!(state);
+            mutator.post_exec(state, i as i32, corpus_idx)?;
+            post.post_exec(state, i as i32, corpus_idx)?;
+            mark_feature_time!(state, PerfFeature::MutatePostExec);
+        }
 
         Ok(())
     }
