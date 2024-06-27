@@ -347,6 +347,7 @@ where
             }
             res.into_iter().collect()
         };
+        target_byte_pos.sort();
 
         println!("The set of target byte pos: {:?}", target_byte_pos);
 
@@ -365,6 +366,7 @@ where
         // mutate these bytes
         for i in 0..128 {
             let mut input = BytesInput::new(target_bytes.clone());
+            println!("Original target bytes: {:?}", input.bytes());
 
             start_timer!(state);
             let mutated = mutator.mutate(state, &mut input, i)?;
@@ -382,6 +384,7 @@ where
             for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
                 bytes[*dest_pos] = altered_bytes[arr_idx];
             }
+            println!("Mutated target bytes {:?}, at pos {:?}; end result: {:?}", altered_bytes, target_byte_pos, bytes);
 
             // Time is measured directly the `evaluate_input` function
             let (untransformed, post) = input.try_transform_into(state)?;
