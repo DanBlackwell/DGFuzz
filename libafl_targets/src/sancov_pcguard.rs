@@ -15,9 +15,8 @@ use once_cell::unsync::Lazy;
 static mut SEEN_GUARDS: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 static mut UNUSED_GUARD_INDEXES: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 
-extern "C" {
-    pub static mut LAST_SEEN_EDGE: usize;
-}
+#[no_mangle]
+pub static mut LAST_SEEN_EDGE: usize = 0;
 
 /// Callback for sancov `pc_guard` - usually called by `llvm` on each block or edge.
 ///

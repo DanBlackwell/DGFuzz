@@ -90,6 +90,7 @@ pub struct ClangWrapper {
     need_libafl_arg: bool,
     has_libafl_arg: bool,
     use_new_pm: bool,
+    use_dummy_lib: bool,
 
     output: Option<PathBuf>,
     configurations: Vec<crate::Configuration>,
@@ -577,6 +578,7 @@ impl ClangWrapper {
             passes_args: vec![],
             passes_linking_args: vec![],
             is_silent: false,
+            use_dummy_lib: false,
         }
     }
 
@@ -644,6 +646,39 @@ impl ClangWrapper {
     pub fn use_new_pm(&mut self, value: bool) -> &'_ mut Self {
         self.use_new_pm = value;
         self
+    }
+
+    pub fn use_dummy_lib(&mut self, value: bool) -> &'_ mut Self {
+        self.use_dummy_lib = value;
+        self
+    }
+
+    pub fn link_real_or_dummy_lib<S>(&mut self, dir: &Path, real_lib_name: S, dummy_lib_name: S) -> &'_ mut Self
+    where
+        S: AsRef<str>,
+    {
+        let name = if self.use_dummy_lib { dummy_lib_name } else { real_lib_name };
+        let lib_file = dir
+            .join(format!("{LIB_PREFIX}{}.{LIB_EXT}", name.as_ref()))
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        println!("linking with {:?}", lib_file);
+
+        if cfg!(unix) {
+            if cfg!(target_vendor = "apple") {
+                // Same as --whole-archive on linux
+                // Without this option, the linker picks the first symbols it finds and does not care if it's a weak or a strong symbol
+                // See: <https://stackoverflow.com/questions/13089166/how-to-make-gcc-link-strong-symbol-in-static-library-to-overwrite-weak-symbol>
+                self.add_link_arg("-Wl,-force_load").add_link_arg(lib_file)
+            } else {
+                self.add_link_arg("-Wl,--whole-archive")
+                    .add_link_arg(lib_file)
+                    .add_link_arg("-Wl,--no-whole-archive")
+            }
+        } else {
+            self.add_link_arg(format!("-Wl,-wholearchive:{lib_file}"))
+        }
     }
 }
 

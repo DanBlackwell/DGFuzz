@@ -29,7 +29,6 @@ default = [
     "cmplog",
     "coverage",
     "common",
-    "dataflow"
 ]
 std = ["libafl/std"]
 libfuzzer = ["std", "common"]

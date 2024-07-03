@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-uint64_t LAST_SEEN_EDGE = 0;
+extern uint64_t LAST_SEEN_EDGE;
 unsigned char dfsan_labels_following_edge[2 * 1024 * 1024] = {0};
 
 void __dfsan_init(void);

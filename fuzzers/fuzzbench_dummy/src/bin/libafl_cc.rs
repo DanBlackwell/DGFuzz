@@ -16,22 +16,15 @@ pub fn main() {
 
         dir.pop();
 
+        // Must be always present, even without --libafl
+//        args.push("-fsanitize-coverage=trace-pc-guard,trace-cmp".into());
+
         let mut cc = ClangWrapper::new();
 
         #[cfg(any(target_os = "linux", target_vendor = "apple"))]
         cc.add_pass(LLVMPasses::AutoTokens);
 
-        println!("args: {:?}", args);
-        let cc_ref = if let Some(index) = args.iter().position(|x| x == "--dummy") {
-            args.remove(index);
-            println!("detected --dummy flags, args now: {:?}", args);
-            cc.use_dummy_lib(true)
-        } else {
-            &mut cc
-        };
-
-        if let Some(code) = cc_ref
-            .dont_optimize()
+        if let Some(code) = cc
             .cpp(is_cpp)
             // silence the compiler wrapper output, needed for some configure scripts.
             .silence(true)
@@ -39,9 +32,9 @@ pub fn main() {
             .need_libafl_arg(true)
             .parse_args(&args)
             .expect("Failed to parse the command line")
-            .link_real_or_dummy_lib(&dir, "fuzzbench", "dummy")
+            .link_staticlib(&dir, "fuzzbench")
             .add_pass(LLVMPasses::SanCovWithCFG)
-            // .add_pass(LLVMPasses::CmpLogRtn)
+            .add_pass(LLVMPasses::CmpLogRtn)
             .run()
             .expect("Failed to run the wrapped compiler")
         {
