@@ -8,15 +8,6 @@ __attribute__((weak)) void __sanitizer_cov_trace_pc_guard_init(uint32_t *start,
 __attribute__((weak)) void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
 }
 
-__attribute__((weak)) void dfsan_set_conditional_callback(dfsan_conditional_callback_t cb) {
-}
-
-__attribute__((weak)) void dfsan_set_label(uint16_t label) {
-}
-
-__attribute__((weak)) void __cmplog_rtn_hook(uint8_t *ptr1, uint8_t *ptr2) {
-}
-
 __attribute__((weak)) void __cmplog_rtn_gcc_stdstring_cstring(
     uint8_t *stdstring, uint8_t *cstring) {
 }

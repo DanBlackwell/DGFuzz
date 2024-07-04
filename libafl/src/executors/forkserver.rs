@@ -579,7 +579,6 @@ pub struct ForkserverExecutorBuilder<'a, SP> {
     is_persistent: bool,
     is_deferred_frksrv: bool,
     autotokens: Option<&'a mut Tokens>,
-    control_flow_graph: Option<&'a mut ControlFlowGraph>,
     input_filename: Option<OsString>,
     shmem_provider: Option<&'a mut SP>,
     max_input_size: usize,
@@ -652,6 +651,9 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
         S::Input: Input + HasTargetBytes,
         SP: ShMemProvider,
     {
+        // not sure when / if this is called - but we probably don't want it
+        assert!(false);
+
         let (forkserver, input_file, map) = self.build_helper()?;
 
         let target = self.program.take().unwrap();
@@ -779,8 +781,7 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
         // <https://github.com/AFLplusplus/AFLplusplus/blob/147654f8715d237fe45c1657c87b2fe36c4db22a/instrumentation/afl-compiler-rt.o.c#L1026>
         if status & FS_OPT_ENABLED == FS_OPT_ENABLED && 
             (status & FS_OPT_SHDMEM_FUZZ == FS_OPT_SHDMEM_FUZZ || 
-             status & FS_OPT_AUTODICT == FS_OPT_AUTODICT || 
-             status & FS_OPT_DUMP_CFG == FS_OPT_DUMP_CFG)
+             status & FS_OPT_AUTODICT == FS_OPT_AUTODICT)
         {
             let mut send_status = FS_OPT_ENABLED;
 
@@ -793,12 +794,6 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
             if (status & FS_OPT_AUTODICT == FS_OPT_AUTODICT) && self.autotokens.is_some() {
                 log::info!("Using AUTODICT feature");
                 send_status |= FS_OPT_AUTODICT;
-            }
-
-            println!("self.control_flow_graph: {:?}", self.control_flow_graph);
-            if (status & FS_OPT_DUMP_CFG == FS_OPT_DUMP_CFG) && self.control_flow_graph.is_some() {
-                log::info!("Using DUMP_CFG (control flow graph) feature");
-                send_status |= FS_OPT_DUMP_CFG;
             }
 
             if send_status != FS_OPT_ENABLED {
@@ -835,51 +830,6 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
                         t.parse_autodict(&buf[..dict_size as usize], dict_size as usize);
                     }
                 }
-
-                if send_status & FS_OPT_DUMP_CFG == FS_OPT_DUMP_CFG {
-                    let (read_len, cfg_len) = forkserver.read_st()?;
-                    if read_len != 4 {
-                        return Err(Error::unknown(
-                            "Reading from forkserver failed.".to_string(),
-                        ));
-                    }
-
-                    if !(2..=0xffffff).contains(&cfg_len) {
-                        return Err(Error::illegal_state(
-                            "Control flow graph has an illegal size".to_string(),
-                        ));
-                    }
-
-                    log::info!("Control flow graph size {cfg_len}");
-                    println!("CFG len: {cfg_len}");
-                    let mut remaining_bytes = cfg_len as usize;
-                    let mut buf = vec![];
-
-                    while remaining_bytes > 0 {
-                        let (rlen, temp_buf) = forkserver.read_st_size(remaining_bytes)?;
-                        if rlen == 0 {
-                            return Err(Error::unknown(
-                                    format!("Managed to load {} bytes out of {} then failed", cfg_len as usize - remaining_bytes, cfg_len)
-                                   ));
-                        }
-                        buf.append(&mut (temp_buf[0..rlen]).to_vec());
-                        if rlen > i32::MAX as usize {
-                            return Err(Error::unknown(format!("rlen was {rlen}, larger than i32::MAX ({})", i32::MAX)));
-                        }
-                        if rlen > remaining_bytes {
-                            panic!("rlen: {rlen}, remaining_bytes: {remaining_bytes}");
-                        }
-                        remaining_bytes -= rlen;
-                    }
-
-                    println!("loaded in CFG");
-
-                    if let Some(cfg) = &mut self.control_flow_graph {
-                        cfg.parse_from_buf(&buf);
-                        println!("Finished parsing CFG");
-                        // println!("Parsed CFG: {:?}", cfg);
-                    } 
-                }
             }
         } else {
             log::warn!("Forkserver Options are not available.");
@@ -892,12 +842,6 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
     #[must_use]
     pub fn autotokens(mut self, tokens: &'a mut Tokens) -> Self {
         self.autotokens = Some(tokens);
-        self
-    }
-
-    /// Set the CFG for the forkserver
-    pub fn control_flow_graph(mut self, control_flow_graph: &'a mut ControlFlowGraph) -> Self {
-        self.control_flow_graph = Some(control_flow_graph);
         self
     }
 
@@ -1103,7 +1047,6 @@ impl<'a> ForkserverExecutorBuilder<'a, UnixShMemProvider> {
             is_persistent: false,
             is_deferred_frksrv: false,
             autotokens: None,
-            control_flow_graph: None,
             input_filename: None,
             shmem_provider: None,
             map_size: None,
@@ -1129,7 +1072,6 @@ impl<'a> ForkserverExecutorBuilder<'a, UnixShMemProvider> {
             is_persistent: self.is_persistent,
             is_deferred_frksrv: self.is_deferred_frksrv,
             autotokens: self.autotokens,
-            control_flow_graph: self.control_flow_graph,
             input_filename: self.input_filename,
             shmem_provider: Some(shmem_provider),
             map_size: self.map_size,

@@ -1429,13 +1429,17 @@ void dfsan_add_labels(u8 *input, size_t input_len) {
 }
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
-    printf("hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
-    __afl_dataflow_ptr[last_edge] = (u8)label;
+  if (__afl_debug){
+    fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
+  }
+  __afl_dataflow_ptr[last_edge] = (u8)label;
 }
 
 void dfsan_init() {
-    printf("Setting dfsan callback to %p\n", dfsan_found_conditional);
-    dfsan_set_conditional_callback(dfsan_found_conditional);
+  if (__afl_debug) {
+    fprintf(stderr, "Setting dfsan callback to %p\n", dfsan_found_conditional);
+  }
+  dfsan_set_conditional_callback(dfsan_found_conditional);
 }
 
 /* The following stuff deals with supporting -fsanitize-coverage=trace-pc-guard.

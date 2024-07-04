@@ -19,7 +19,7 @@ use clap::{Arg, Command};
 use libafl::{
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::SimpleRestartingEventManager,
-    executors::{inprocess::InProcessExecutor, ExitKind},
+    executors::{inprocess::InProcessExecutor, ExitKind, forkserver::ForkserverExecutor},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, cfg_prescience::ControlFlowGraph},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -29,7 +29,7 @@ use libafl::{
         scheduled::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
         StdMOptMutator, StdScheduledMutator, Tokens,
     },
-    observers::{HitcountsMapObserver, TimeObserver},
+    observers::{StdMapObserver, HitcountsMapObserver, TimeObserver},
     prelude::probabilistic_sampling::UncoveredNeighboursProbabilitySamplingScheduler,
     schedulers::{
         powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
@@ -44,10 +44,12 @@ use libafl::{
 use libafl_bolts::{
     current_nanos, current_time,
     os::dup2,
+    prelude::OwnedMutSlice,
     rands::StdRand,
-    shmem::{ShMemProvider, StdShMemProvider},
+    shmem::{ShMemProvider, StdShMemProvider, ShMem},
     tuples::{tuple_list, Merge},
     AsSlice,
+    AsMutSlice
 };
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use libafl_targets::autotokens;
@@ -99,12 +101,12 @@ pub extern "C" fn libafl_main() {
                 .long("cfg_file")
                 .help("The file to read Control Flow Graph from"),
         )
-        // .arg(
-        //     Arg::new("dfsan_binary")
-        //         .short('d')
-        //         .long("dfsan_binary")
-        //         .help("Path of the executable compiled with DFSan")
-        // )
+        .arg(
+            Arg::new("dfsan_binary")
+                .short('d')
+                .long("dfsan_binary")
+                .help("Path of the executable compiled with DFSan")
+        )
         .arg(
             Arg::new("logfile")
                 .short('l')
@@ -181,9 +183,9 @@ pub extern "C" fn libafl_main() {
 
     let logfile = PathBuf::from(res.get_one::<String>("logfile").unwrap().to_string());
 
-    // let dfsan_binary = PathBuf::from(
-    //     res.get_one::<String>("dfsan_binary").unwrap().to_string()
-    // );
+    let dfsan_binary = PathBuf::from(
+        res.get_one::<String>("dfsan_binary").unwrap().to_string()
+    );
 
     let timeout = Duration::from_millis(
         res.get_one::<String>("timeout")
@@ -193,7 +195,7 @@ pub extern "C" fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, &in_dir, tokens, cfg_file, &logfile, timeout)
+    fuzz(out_dir, crashes, &in_dir, tokens, cfg_file, &logfile, timeout, dfsan_binary)
         .expect("An error occurred while fuzzing");
 }
 
@@ -230,6 +232,7 @@ fn fuzz(
     cfg_file: Option<PathBuf>,
     logfile: &PathBuf,
     timeout: Duration,
+    dfsan_binary: PathBuf,
 ) -> Result<(), Error> {
     let log = RefCell::new(OpenOptions::new().append(true).create(true).open(logfile)?);
 
@@ -383,7 +386,8 @@ fn fuzz(
         // Give it more time!
     );
 
-    let dataflow = DataflowStage::new();
+
+    let dataflow = DataflowStage::new(dfsan_binary, timeout, &mut shmem_provider);
 
     // The order of the stages matter!
     let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
