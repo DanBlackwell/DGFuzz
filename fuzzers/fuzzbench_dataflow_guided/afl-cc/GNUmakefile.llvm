@@ -341,7 +341,7 @@ ifeq "$(TEST_MMAP)" "1"
 endif
 
 PROGS_ALWAYS = ./afl-cc ./afl-compiler-rt.o ./afl-compiler-rt-32.o ./afl-compiler-rt-64.o 
-PROGS        = $(PROGS_ALWAYS) ./afl-llvm-pass.so ./SanitizerCoveragePCGUARD.so ./split-compares-pass.so ./split-switches-pass.so ./cmplog-routines-pass.so ./cmplog-instructions-pass.so ./cmplog-switches-pass.so ./afl-llvm-dict2file.so ./compare-transform-pass.so ./afl-ld-lto ./afl-llvm-lto-instrumentlist.so ./SanitizerCoverageLTO.so ./injection-pass.so
+PROGS        = $(PROGS_ALWAYS) ./afl-llvm-pass.so ./SanitizerCoveragePCGUARD.so SanitizerCoverageCFG.so ./split-compares-pass.so ./split-switches-pass.so ./cmplog-routines-pass.so ./cmplog-instructions-pass.so ./cmplog-switches-pass.so ./afl-llvm-dict2file.so ./compare-transform-pass.so ./afl-ld-lto ./afl-llvm-lto-instrumentlist.so ./SanitizerCoverageLTO.so ./injection-pass.so
 
 # If prerequisites are not given, warn, do not build anything, and exit with code 0
 ifeq "$(LLVMVER)" ""
@@ -407,6 +407,8 @@ instrumentation/afl-common.o: ./src/afl-common.c
 	@ln -sf afl-cc ./afl-clang++
 	@ln -sf afl-cc ./afl-clang-fast
 	@ln -sf afl-cc ./afl-clang-fast++
+	@ln -sf afl-cc ./afl-clang-cfg
+	@ln -sf afl-cc ./afl-clang-cfg++
 ifneq "$(AFL_CLANG_FLTO)" ""
 ifeq "$(LLVM_LTO)" "1"
 	@ln -sf afl-cc ./afl-clang-lto
@@ -448,6 +450,11 @@ ifeq "$(LLVM_LTO)" "1"
 	@$(CLANG_BIN) $(CFLAGS_SAFE) $(CPPFLAGS) -Wno-unused-result -O0 $(AFL_CLANG_FLTO) -m32 -fPIC -c instrumentation/afl-llvm-rt-lto.o.c -o ./afl-llvm-rt-lto-32.o 2>/dev/null; if [ "$$?" = "0" ]; then : ; fi
 endif
 
+./SanitizerCoverageCFG.so: instrumentation/SanitizerCoverageCFG.so.cc instrumentation/afl-llvm-common.o | test_deps
+ifeq "$(LLVM_13_OK)" "1"
+	-$(CXX) $(CLANG_CPPFL) -fno-rtti -fPIC -std=$(LLVM_STDCXX) -shared $< -o $@ $(CLANG_LFL) -Wno-deprecated-copy-dtor -Wdeprecated instrumentation/afl-llvm-common.o
+endif
+
 # laf
 ./split-switches-pass.so:	instrumentation/split-switches-pass.so.cc instrumentation/afl-llvm-common.o | test_deps
 	$(CXX) $(CLANG_CPPFL) -shared $< -o $@ $(CLANG_LFL) instrumentation/afl-llvm-common.o
@@ -474,20 +481,20 @@ afl-llvm-dict2file.so:	instrumentation/afl-llvm-dict2file.so.cc instrumentation/
 
 .PHONY: document
 document:
-	$(CLANG_BIN) -D_AFL_DOCUMENT_MUTATIONS $(CFLAGS_SAFE) $(CPPFLAGS) $(CLANG_CFL) -O3 -Wno-unused-result -fPIC -c instrumentation/afl-compiler-rt.o.c -o ./afl-compiler-rt.o
-	@$(CLANG_BIN) -D_AFL_DOCUMENT_MUTATIONS $(CFLAGS_SAFE) $(CPPFLAGS) $(CLANG_CFL) -O3 -Wno-unused-result -m32 -fPIC -c instrumentation/afl-compiler-rt.o.c -o ./afl-compiler-rt-32.o 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
-	@$(CLANG_BIN) -D_AFL_DOCUMENT_MUTATIONS $(CFLAGS_SAFE) $(CPPFLAGS) $(CLANG_CFL) -O3 -Wno-unused-result -m64 -fPIC -c instrumentation/afl-compiler-rt.o.c -o ./afl-compiler-rt-64.o 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+	$(CLANG_BIN) -D_AFL_DOCUMENT_MUTATIONS $(CFLAGS_SAFE) $(CPPFLAGS) $(CLANG_CFL) -O3 -Wno-unused-result -fPIC -c instrumentation/afl-compiler-rt.o.c -fsanitize=dataflow -o ./afl-compiler-rt.o
+	@$(CLANG_BIN) -D_AFL_DOCUMENT_MUTATIONS $(CFLAGS_SAFE) $(CPPFLAGS) $(CLANG_CFL) -O3 -Wno-unused-result -m32 -fPIC -c instrumentation/afl-compiler-rt.o.c -fsanitize=dataflow -o ./afl-compiler-rt-32.o 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+	@$(CLANG_BIN) -D_AFL_DOCUMENT_MUTATIONS $(CFLAGS_SAFE) $(CPPFLAGS) $(CLANG_CFL) -O3 -Wno-unused-result -m64 -fPIC -c instrumentation/afl-compiler-rt.o.c -fsanitize=dataflow -o ./afl-compiler-rt-64.o 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 ./afl-compiler-rt.o: instrumentation/afl-compiler-rt.o.c
-	$(CC) $(CLANG_CFL) $(CFLAGS_SAFE) $(CPPFLAGS) -O3 -Wno-unused-result -fPIC -c $< -o $@
+	$(CC) $(CLANG_CFL) $(CFLAGS_SAFE) $(CPPFLAGS) -O3 -Wno-unused-result -fPIC -fsanitize=dataflow -c $< -o $@
 
 ./afl-compiler-rt-32.o: instrumentation/afl-compiler-rt.o.c
 	@printf "[*] Building 32-bit variant of the runtime (-m32)... "
-	@$(CC) $(CLANG_CFL) $(CFLAGS_SAFE) $(CPPFLAGS) -O3 -Wno-unused-result -m32 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+	@$(CC) $(CLANG_CFL) $(CFLAGS_SAFE) $(CPPFLAGS) -O3 -Wno-unused-result -m32 -fPIC -fsanitize=dataflow -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 ./afl-compiler-rt-64.o: instrumentation/afl-compiler-rt.o.c
 	@printf "[*] Building 64-bit variant of the runtime (-m64)... "
-	@$(CC) $(CLANG_CFL) $(CFLAGS_SAFE) $(CPPFLAGS) -O3 -Wno-unused-result -m64 -fPIC -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
+	@$(CC) $(CLANG_CFL) $(CFLAGS_SAFE) $(CPPFLAGS) -O3 -Wno-unused-result -m64 -fPIC -fsanitize=dataflow -c $< -o $@ 2>/dev/null; if [ "$$?" = "0" ]; then echo "success!"; else echo "failed (that's fine)"; fi
 
 .PHONY: test_build
 test_build: $(PROGS)
@@ -518,6 +525,7 @@ install: all
 	@if [ -f ./compare-transform-pass.so ]; then set -e; install -m 755 ./*.so $${DESTDIR}$(HELPER_PATH); fi
 	@if [ -f ./compare-transform-pass.so ]; then set -e; ln -sf afl-cc $${DESTDIR}$(BIN_PATH)/afl-clang-fast ; ln -sf ./afl-c++ $${DESTDIR}$(BIN_PATH)/afl-clang-fast++ ; ln -sf afl-cc $${DESTDIR}$(BIN_PATH)/afl-clang ; ln -sf ./afl-c++ $${DESTDIR}$(BIN_PATH)/afl-clang++ ; fi
 	@if [ -f ./SanitizerCoverageLTO.so ]; then set -e; ln -sf afl-cc $${DESTDIR}$(BIN_PATH)/afl-clang-lto ; ln -sf ./afl-c++ $${DESTDIR}$(BIN_PATH)/afl-clang-lto++ ; fi
+	@if [ -f ./SanitizerCoverageCFG.so ]; then set -e; ln -sf afl-cc $${DESTDIR}$(BIN_PATH)/afl-clang-cfg ; ln -sf ./afl-c++ $${DESTDIR}$(BIN_PATH)/afl-clang-cfg++ ; fi
 	set -e; install -m 644 ./dynamic_list.txt $${DESTDIR}$(HELPER_PATH)
 	install -m 644 instrumentation/README.*.md $${DESTDIR}$(DOC_PATH)/
 
@@ -544,6 +552,8 @@ install: all
 	@ln -sf afl-cc.8 ./afl-c++.8
 	@ln -sf afl-cc.8 ./afl-clang-fast.8
 	@ln -sf afl-cc.8 ./afl-clang-fast++.8
+	@ln -sf afl-cc ./afl-clang-cfg.8
+	@ln -sf afl-cc ./afl-clang-cfg++.8
 ifneq "$(AFL_CLANG_FLTO)" ""
 ifeq "$(LLVM_LTO)" "1"
 	@ln -sf afl-cc.8 ./afl-clang-lto.8

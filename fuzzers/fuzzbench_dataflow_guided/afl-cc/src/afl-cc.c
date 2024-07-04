@@ -165,7 +165,7 @@ typedef struct aflcc_state {
 
   u8 debug;
 
-  u8 compiler_mode, plusplus_mode, lto_mode;
+  u8 compiler_mode, plusplus_mode, lto_mode, cfg_mode;
 
   u8 *lto_flag;
 
@@ -174,7 +174,7 @@ typedef struct aflcc_state {
   u8 cmplog_mode;
 
   u8 have_instr_env, have_gcc, have_clang, have_llvm, have_gcc_plugin, have_lto,
-      have_optimized_pcguard, have_instr_list;
+      have_optimized_pcguard, have_instr_list, have_cfg;
 
   u8 fortify_set, x_set, bit_mode, preprocessor_only, have_unroll, have_o,
       have_pic, have_c, shared_linking, partial_linking, non_dash, have_fp,
@@ -645,7 +645,19 @@ void compiler_mode_by_callname(aflcc_state_t *aflcc) {
 
     aflcc->compiler_mode = CLANG;
 
+  } else if (strcmp(aflcc->callname, "afl-clang-cfg") == 0 ||
+
+             strcmp(aflcc->callname, "afl-clang-cfg++") == 0) {
+
+    printf("DAN set compiler_mode = CLANG\n");
+    aflcc->cfg_mode = 1;
+    aflcc->have_llvm = 1;
+    aflcc->compiler_mode = LLVM;
+    aflcc->instrument_mode = INSTRUMENT_CFG;
+
   }
+
+  printf("DAN calling: %s\n", aflcc->callname);
 
 }
 
@@ -957,21 +969,25 @@ static void instrument_mode_new_environ(aflcc_state_t *aflcc) {
 
     }
 
-    if (strncasecmp(ptr2, "cfg", strlen("cfg")) == 0 ||
-        strncasecmp(ptr2, "instrim", strlen("instrim")) == 0) {
-
-      FATAL(
-          "InsTrim instrumentation was removed. Use a modern LLVM and "
-          "PCGUARD (default in afl-cc).\n");
-
-    }
-
     if (strncasecmp(ptr2, "lto", strlen("lto")) == 0) {
 
       aflcc->lto_mode = 1;
       if (!aflcc->instrument_mode || aflcc->instrument_mode == INSTRUMENT_LTO)
 
         aflcc->instrument_mode = INSTRUMENT_LTO;
+
+      else
+        FATAL("main instrumentation mode already set with %s",
+              instrument_mode_2str(aflcc->instrument_mode));
+
+    }
+
+    if (strncasecmp(ptr2, "cfg", strlen("cfg")) == 0) {
+
+      aflcc->cfg_mode = 1;
+      if (!aflcc->instrument_mode || aflcc->instrument_mode == INSTRUMENT_CFG)
+
+        aflcc->instrument_mode = INSTRUMENT_CFG;
 
       else
         FATAL("main instrumentation mode already set with %s",
@@ -1242,30 +1258,29 @@ void mode_final_checkout(aflcc_state_t *aflcc, int argc, char **argv) {
 
   if (aflcc->compiler_mode == GCC) { aflcc->instrument_mode = INSTRUMENT_GCC; }
 
-  if (aflcc->compiler_mode == CLANG) {
+  // if (aflcc->compiler_mode == CLANG) {
 
-    /* if our PCGUARD implementation is not available then silently switch to
-     native LLVM PCGUARD. Or classic asm instrument is explicitly preferred. */
-    if (!aflcc->have_optimized_pcguard &&
-        (aflcc->instrument_mode == INSTRUMENT_DEFAULT ||
-         aflcc->instrument_mode == INSTRUMENT_PCGUARD)) {
+  //   /* if our PCGUARD implementation is not available then silently switch to
+  //    native LLVM PCGUARD. Or classic asm instrument is explicitly preferred. */
+  //   if (!aflcc->have_optimized_pcguard &&
+  //       (aflcc->instrument_mode == INSTRUMENT_DEFAULT ||
+  //        aflcc->instrument_mode == INSTRUMENT_PCGUARD)) {
 
-      aflcc->instrument_mode = INSTRUMENT_LLVMNATIVE;
+  //     aflcc->instrument_mode = INSTRUMENT_LLVMNATIVE;
 
-    } else {
+  //   } else {
 
-      aflcc->instrument_mode = INSTRUMENT_CLANG;
-      setenv(CLANG_ENV_VAR, "1", 1);  // used by afl-as
+  //     aflcc->instrument_mode = INSTRUMENT_CLANG;
+  //     setenv(CLANG_ENV_VAR, "1", 1);  // used by afl-as
 
-    }
+  //   }
 
-  }
+  // }
 
   if (aflcc->compiler_mode == LTO) {
 
     if (aflcc->instrument_mode == 0 ||
         aflcc->instrument_mode == INSTRUMENT_LTO ||
-        aflcc->instrument_mode == INSTRUMENT_CFG ||
         aflcc->instrument_mode == INSTRUMENT_PCGUARD) {
 
       aflcc->lto_mode = 1;
@@ -1311,13 +1326,6 @@ void mode_final_checkout(aflcc_state_t *aflcc, int argc, char **argv) {
 #else
     aflcc->instrument_mode = INSTRUMENT_AFL;
 #endif
-
-  }
-
-  if (!aflcc->instrument_opt_mode && aflcc->lto_mode &&
-      aflcc->instrument_mode == INSTRUMENT_CFG) {
-
-    aflcc->instrument_mode = INSTRUMENT_PCGUARD;
 
   }
 
@@ -2276,6 +2284,25 @@ param_st parse_linking_params(aflcc_state_t *aflcc, u8 *cur_argv, u8 scan,
   if (final_ == PARAM_KEEP) insert_param(aflcc, cur_argv);
 
   return final_;
+
+}
+
+/* Add params to launch SanitizerCoverageLTO.so when linking  */
+void add_cfg_passes(aflcc_state_t *aflcc) {
+
+#if defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 15
+  // The NewPM implementation only works fully since LLVM 15.
+  insert_object(aflcc, "SanitizerCoverageCFG.so", "-Wl,--load-pass-plugin=%s",
+                0);
+#elif defined(AFL_CLANG_LDPATH) && LLVM_MAJOR >= 13
+  insert_param(aflcc, "-Wl,--lto-legacy-pass-manager");
+  insert_object(aflcc, "SanitizerCoverageCFG.so", "-Wl,-mllvm=-load=%s", 0);
+#else
+  insert_param(aflcc, "-fno-experimental-new-pass-manager");
+  insert_object(aflcc, "SanitizerCoverageCFG.so", "-Wl,-mllvm=-load=%s", 0);
+#endif
+
+  insert_param(aflcc, "-Wl,--allow-multiple-definition");
 
 }
 
@@ -3438,6 +3465,11 @@ static void edit_params(aflcc_state_t *aflcc, u32 argc, char **argv,
         add_lto_passes(aflcc);
 
       }
+
+    } else if (aflcc->cfg_mode) {
+
+      load_llvm_pass(aflcc, "SanitizerCoverageCFG.so");
+      aflcc->cmplog_mode = 0;
 
     } else {
 

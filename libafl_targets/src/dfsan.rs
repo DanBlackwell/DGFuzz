@@ -7,7 +7,7 @@ use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, ops::Range, slice};
 use hashbrown::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::libfuzzer_test_one_input;
+// use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
     rands::Rand, 
     tuples::{tuple_list, tuple_list_type, MatchName}, 
@@ -27,7 +27,7 @@ use libafl::{
     mark_feature_time, 
     mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, 
     observers::{MapObserver, ObserversTuple}, 
-    prelude::{HasClientPerfMonitor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver, ForkserverExecutor, }, 
+    prelude::{HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver, ForkserverExecutor, }, 
     stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, 
     start_timer, 
     state::{HasCorpus, HasMetadata, HasRand, UsesState}, 
@@ -182,7 +182,7 @@ where
         E: UsesState,
         EM: EventFirer<State = E::State> + EventRestarter,
         Z: UsesState<State = E::State> + HasObjective,
-        E::State: HasCorpus + HasSolutions + HasClientPerfMonitor + HasExecutions,
+        E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasBytesVec,
     {
         println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
