@@ -6,6 +6,8 @@ use alloc::{
 use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, ops::Range, slice};
 use hashbrown::{HashMap, HashSet};
 use std::path::PathBuf;
+use nix::sys::signal::Signal;
+
 
 // use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
@@ -133,19 +135,21 @@ where
         let mut shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
         // let the forkserver know the shmid
         shmem.write_to_env("__AFL_SHM_ID").unwrap();
-        let dfsan_labels_map;
-        let mut edges_map;
+        let mut dfsan_labels_map;
+        let map_ptr;
         unsafe {
-            let map_ptr = shmem.as_mut_ptr_of::<u8>().unwrap();
-            edges_map = OwnedMutSlice::from_raw_parts_mut(map_ptr, MAP_SIZE);
+            map_ptr = shmem.as_mut_ptr_of::<u8>().unwrap();
+            // edges_map = OwnedMutSlice::from_raw_parts_mut(map_ptr, MAP_SIZE);
             dfsan_labels_map = OwnedMutSlice::from_raw_parts_mut(map_ptr.offset(MAP_SIZE as isize), MAP_SIZE);
         }
         // To let know the AFL++ binary that we have a big map
         std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));
+   
+        println!("map_ptr: {:?}, labels: {:?}", map_ptr, dfsan_labels_map);
 
         // Create an observation channel using the hitcounts map of AFL++
         let edges_observer =
-            unsafe { HitcountsMapObserver::new(StdMapObserver::from_mut_slice("edges_map", edges_map)) };
+            unsafe { HitcountsMapObserver::new(StdMapObserver::from_mut_ptr("edges_map", map_ptr, MAP_SIZE)) };
 
         // Create an observation channel to keep track of the execution time
         let time_observer = TimeObserver::new("time");
@@ -157,8 +161,8 @@ where
             // .parse_afl_cmdline(arguments)
             .coverage_map_size(MAP_SIZE)
             .timeout(timeout)
-            // .kill_signal(signal)
-            .is_persistent(false);
+            .kill_signal(Signal::SIGKILL)
+            .is_persistent(true);
         let mut executor = fs_builder
             .build(tuple_list!(edges_observer, time_observer))
             // .build_dynamic_map(edges_observer, tuple_list!(time_observer))
@@ -185,43 +189,50 @@ where
         E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasBytesVec,
     {
-        println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
-        let mut label_num = 1;
-        let mut buf = self.dfsan_labels_map.as_mut_slice();
-        buf[0] = labels.len() as u8;
-        let mut pos = 1;
-        for label in labels {
-            buf[pos]   = ((label.start_pos >> 24) & 0xFF) as u8;
-            buf[pos+1] = ((label.start_pos >> 16) & 0xFF) as u8;
-            buf[pos+2] = ((label.start_pos >> 8)  & 0xFF) as u8;
-            buf[pos+3] = (label.start_pos & 0xFF) as u8;
-            pos += 4;
+        // println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
+        // let mut label_num = 1;
+        // println!("trying to get the map");
+        // println!("{:?}", self.dfsan_labels_map);
+        // let buf = self.dfsan_labels_map.as_mut_slice();
+	// println!("got mut slice");
+        // println!("buf[0]: {:?}", buf[0]);
+        // buf[0] = labels.len() as u8;
+        // let mut pos = 1;
+        // println!("going thru labels, map: {} {:?}", buf.len(), buf);
+        // for label in labels {
+        //     buf[pos]   = ((label.start_pos >> 24) & 0xFF) as u8;
+        //     buf[pos+1] = ((label.start_pos >> 16) & 0xFF) as u8;
+        //     buf[pos+2] = ((label.start_pos >> 8)  & 0xFF) as u8;
+        //     buf[pos+3] = (label.start_pos & 0xFF) as u8;
+        //     pos += 4;
 
-            buf[pos]   = ((label.len >> 24) & 0xFF) as u8;
-            buf[pos+1] = ((label.len >> 16) & 0xFF) as u8;
-            buf[pos+2] = ((label.len >> 8)  & 0xFF) as u8;
-            buf[pos+3] = (label.len & 0xFF) as u8;
-            pos += 4;
-        }
+        //     buf[pos]   = ((label.len >> 24) & 0xFF) as u8;
+        //     buf[pos+1] = ((label.len >> 16) & 0xFF) as u8;
+        //     buf[pos+2] = ((label.len >> 8)  & 0xFF) as u8;
+        //     buf[pos+3] = (label.len & 0xFF) as u8;
+        //     pos += 4;
+        // }
+        // println!("done calcing labels");
 
+        println!("will run target!!");
         self.executor.run_target(fuzzer, state, manager, input)?;
 
         let mut labels_for_edge = HashMap::new();
-        unsafe {
-            for i in 0..buf.len() {
-                if buf[i] != 0 {
-                    let the_byte = buf[i];
-                    let mut labels = vec![];
-                    for bit in 0..8 {
-                        if (the_byte >> bit) & 1 == 1 {
-                            labels.push(bit + 1);
-                        }
-                    }
-                    labels_for_edge.insert(i, labels);
-                    buf[i] = 0;
-                }
-            }
-        }
+        // unsafe {
+        //     for i in 0..buf.len() {
+        //         if buf[i] != 0 {
+        //             let the_byte = buf[i];
+        //             let mut labels = vec![];
+        //             for bit in 0..8 {
+        //                 if (the_byte >> bit) & 1 == 1 {
+        //                     labels.push(bit + 1);
+        //                 }
+        //             }
+        //             labels_for_edge.insert(i, labels);
+        //             buf[i] = 0;
+        //         }
+        //     }
+        // }
 
         Ok(labels_for_edge)
     }

@@ -15,10 +15,6 @@ use once_cell::unsync::Lazy;
 static mut SEEN_GUARDS: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 static mut UNUSED_GUARD_INDEXES: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 
-extern "C" {
-    pub static mut LAST_SEEN_EDGE: usize;
-}
-
 /// Callback for sancov `pc_guard` - usually called by `llvm` on each block or edge.
 ///
 /// # Safety
@@ -27,7 +23,6 @@ extern "C" {
 #[no_mangle]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     let pos = *guard as usize;
-    LAST_SEEN_EDGE = pos;
     //if !seen_guards.contains(&(pos as u32)) {
     //    panic!("ERROR: saw a guard {pos} that was not seen in the init???");
     //}
