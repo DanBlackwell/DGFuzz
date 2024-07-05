@@ -90,9 +90,9 @@ void dfsan_found_conditional(dfsan_label label, dfsan_origin origin);
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
   // if (__afl_debug){
-  fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
   // }
   // __afl_dataflow_ptr[last_edge] = (u8)label;
+  fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
 }
 
 void dfsan_init() {
@@ -410,6 +410,7 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
 
   assert(N > 0);
 
+  dfsan_init();
   fprintf(stderr, "DEBUG DAN: about to __afl_manual_init()\n");
   __afl_manual_init();
   fprintf(stderr, "DEBUG DAN: did __afl_manual_init()\n");
@@ -430,9 +431,9 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
     while (__afl_persistent_loop(N)) {
 
       size_t length = *__afl_fuzz_len;
-    dfsan_flush();
-    dfsan_init();
-    dfsan_set_label(1, __afl_fuzz_ptr, length);
+
+      dfsan_flush();
+      dfsan_set_label(1, __afl_fuzz_ptr, length);
 
       if (likely(length)) {
 

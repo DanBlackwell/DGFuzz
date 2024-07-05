@@ -15,7 +15,7 @@ use libafl_bolts::{
     tuples::{tuple_list, tuple_list_type, MatchName}, 
     AsSlice, 
     AsMutSlice,
-    prelude::{OwnedMutSlice, ShMemProvider, StdShMemProvider},
+    prelude::{OwnedMutSlice, ShMemProvider, UnixShMemProvider},
     shmem::ShMem,
 };
 use serde::{Deserialize, Serialize};
@@ -110,7 +110,7 @@ where
     E: UsesState,
 {
     // mutator: StdScheduledMutator<E::Input, HavocMutationsFixedLengthType, E::State>,
-    executor: ForkserverExecutor<(HitcountsMapObserver<StdMapObserver<'a, u8, false>>, (TimeObserver, ())), E::State, StdShMemProvider>,
+    executor: ForkserverExecutor<(HitcountsMapObserver<StdMapObserver<'a, u8, false>>, (TimeObserver, ())), E::State, UnixShMemProvider>,
     dfsan_labels_map: OwnedMutSlice<'a, u8>,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(E, EM, Z)>,
@@ -125,31 +125,15 @@ where
     pub fn new(
         dfsan_binary_path: PathBuf, 
         timeout: std::time::Duration,
-        shmem_provider: &mut StdShMemProvider, 
+        map_size: usize,
+        cov_map_slice: OwnedMutSlice<'a, u8>,
+        dfsan_labels_map_slice: OwnedMutSlice<'a, u8>,
+        shmem_provider: &mut UnixShMemProvider,
     ) -> Self {
-        // a large initial map size that should be enough
-        // to house all potential coverage maps for our targets
-        // (we will eventually reduce the used size according to the actual map)
-        const MAP_SIZE: usize = 2_621_440 / 2;
-        // The coverage map shared between observer and executor
-        let mut shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
-        // let the forkserver know the shmid
-        shmem.write_to_env("__AFL_SHM_ID").unwrap();
-        let mut dfsan_labels_map;
-        let map_ptr;
-        unsafe {
-            map_ptr = shmem.as_mut_ptr_of::<u8>().unwrap();
-            // edges_map = OwnedMutSlice::from_raw_parts_mut(map_ptr, MAP_SIZE);
-            dfsan_labels_map = OwnedMutSlice::from_raw_parts_mut(map_ptr.offset(MAP_SIZE as isize), MAP_SIZE);
-        }
-        // To let know the AFL++ binary that we have a big map
-        std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));
-   
-        println!("map_ptr: {:?}, labels: {:?}", map_ptr, dfsan_labels_map);
 
         // Create an observation channel using the hitcounts map of AFL++
         let edges_observer =
-            unsafe { HitcountsMapObserver::new(StdMapObserver::from_mut_ptr("edges_map", map_ptr, MAP_SIZE)) };
+            unsafe { HitcountsMapObserver::new(StdMapObserver::from_ownedref("edges_map", cov_map_slice)) };
 
         // Create an observation channel to keep track of the execution time
         let time_observer = TimeObserver::new("time");
@@ -159,7 +143,7 @@ where
             .debug_child(true)
             .shmem_provider(shmem_provider)
             // .parse_afl_cmdline(arguments)
-            .coverage_map_size(MAP_SIZE)
+            .coverage_map_size(map_size)
             .timeout(timeout)
             .kill_signal(Signal::SIGKILL)
             .is_persistent(true);
@@ -169,7 +153,7 @@ where
             .unwrap();
 
         // let dataflow = DataflowStage::new(fs_executor, dfsan_labels_map);
-        DataflowStage { executor, dfsan_labels_map, phantom: PhantomData }
+        DataflowStage { executor, dfsan_labels_map: dfsan_labels_map_slice, phantom: PhantomData }
     }
 
     /// return a hashmap giving a Vec of labels for each edge
@@ -189,30 +173,30 @@ where
         E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasBytesVec,
     {
-        // println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
-        // let mut label_num = 1;
-        // println!("trying to get the map");
-        // println!("{:?}", self.dfsan_labels_map);
-        // let buf = self.dfsan_labels_map.as_mut_slice();
-	// println!("got mut slice");
-        // println!("buf[0]: {:?}", buf[0]);
-        // buf[0] = labels.len() as u8;
-        // let mut pos = 1;
-        // println!("going thru labels, map: {} {:?}", buf.len(), buf);
-        // for label in labels {
-        //     buf[pos]   = ((label.start_pos >> 24) & 0xFF) as u8;
-        //     buf[pos+1] = ((label.start_pos >> 16) & 0xFF) as u8;
-        //     buf[pos+2] = ((label.start_pos >> 8)  & 0xFF) as u8;
-        //     buf[pos+3] = (label.start_pos & 0xFF) as u8;
-        //     pos += 4;
+        println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
+        let mut label_num = 1;
+        println!("trying to get the map");
+        println!("{:?}", self.dfsan_labels_map);
+        let buf = self.dfsan_labels_map.as_mut_slice();
+        unsafe {
+            println!("buf[0]: {:?}", buf[0]);
+            buf[0] = labels.len() as u8;
+            let mut pos = 1;
+            for label in labels {
+                buf[pos]   = ((label.start_pos >> 24) & 0xFF) as u8;
+                buf[pos+1] = ((label.start_pos >> 16) & 0xFF) as u8;
+                buf[pos+2] = ((label.start_pos >> 8)  & 0xFF) as u8;
+                buf[pos+3] = (label.start_pos & 0xFF) as u8;
+                pos += 4;
 
-        //     buf[pos]   = ((label.len >> 24) & 0xFF) as u8;
-        //     buf[pos+1] = ((label.len >> 16) & 0xFF) as u8;
-        //     buf[pos+2] = ((label.len >> 8)  & 0xFF) as u8;
-        //     buf[pos+3] = (label.len & 0xFF) as u8;
-        //     pos += 4;
-        // }
-        // println!("done calcing labels");
+                buf[pos]   = ((label.len >> 24) & 0xFF) as u8;
+                buf[pos+1] = ((label.len >> 16) & 0xFF) as u8;
+                buf[pos+2] = ((label.len >> 8)  & 0xFF) as u8;
+                buf[pos+3] = (label.len & 0xFF) as u8;
+                pos += 4;
+            }
+            println!("done calcing labels: {:?}", &buf[..pos]);
+        }
 
         println!("will run target!!");
         self.executor.run_target(fuzzer, state, manager, input)?;
@@ -313,7 +297,7 @@ impl<'a, EM, E, Z> UsesState for DataflowStage<'a, EM, E, Z>
 where
     E: UsesState + UsesInput,
     E::State: HasRand,
-    E::Input: HasBytesVec
+    E::Input: HasBytesVec,
 {
     type State = E::State;
 }

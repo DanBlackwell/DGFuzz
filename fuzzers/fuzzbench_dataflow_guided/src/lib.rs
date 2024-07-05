@@ -18,7 +18,7 @@ use std::{
 use clap::{Arg, Command};
 use libafl::{
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
-    events::SimpleRestartingEventManager,
+    events::{SimpleEventManager, SimpleRestartingEventManager},
     executors::{inprocess::InProcessExecutor, ExitKind, forkserver::ForkserverExecutor},
     feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, cfg_prescience::ControlFlowGraph},
@@ -257,19 +257,21 @@ fn fuzz(
     // This way, we are able to continue fuzzing afterwards.
     let mut shmem_provider = StdShMemProvider::new()?;
 
-    let (state, mut mgr) = match SimpleRestartingEventManager::launch(monitor, &mut shmem_provider)
-    {
-        // The restarting state will spawn the same process again as child, then restarted it each time it crashes.
-        Ok(res) => res,
-        Err(err) => match err {
-            Error::ShuttingDown => {
-                return Ok(());
-            }
-            _ => {
-                panic!("Failed to setup the restarter: {err}");
-            }
-        },
-    };
+    let mut mgr = SimpleEventManager::new(monitor);
+    let state = None;
+    // let (state, mut mgr) = match SimpleRestartingEventManager::launch(monitor, &mut shmem_provider)
+    // {
+    //     // The restarting state will spawn the same process again as child, then restarted it each time it crashes.
+    //     Ok(res) => res,
+    //     Err(err) => match err {
+    //         Error::ShuttingDown => {
+    //             return Ok(());
+    //         }
+    //         _ => {
+    //             panic!("Failed to setup the restarter: {err}");
+    //         }
+    //     },
+    // };
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
@@ -386,8 +388,32 @@ fn fuzz(
         // Give it more time!
     );
 
+    // a large initial map size that should be enough
+    // to house all potential coverage maps for our targets
+    // (we will eventually reduce the used size according to the actual map)
+    const MAP_SIZE: usize = 2_621_440 / 2;
+    // The coverage map shared between observer and executor
+    let mut fs_shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
 
-    let dataflow = DataflowStage::new(dfsan_binary, timeout, &mut shmem_provider);
+    // let the forkserver know the shmid
+    fs_shmem.write_to_env("__AFL_SHM_ID").unwrap();
+
+    let (cov_map_slice, dfsan_labels_slice) = {
+        let shmem_buf = fs_shmem.as_mut_ptr_of::<u8>().unwrap();
+        unsafe {
+            (
+              OwnedMutSlice::from_raw_parts_mut(shmem_buf, MAP_SIZE),
+              OwnedMutSlice::from_raw_parts_mut(shmem_buf.offset(MAP_SIZE as isize), MAP_SIZE),
+            )
+        }
+    };
+
+    // To let know the AFL++ binary that we have a big map
+    std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));
+   
+    // println!("map_ptr: {:?}, labels: {:?}", map_ptr, dfsan_labels_map_ptr);
+
+    let dataflow = DataflowStage::new(dfsan_binary, timeout, MAP_SIZE, cov_map_slice, dfsan_labels_slice, &mut shmem_provider);
 
     // The order of the stages matter!
     let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
