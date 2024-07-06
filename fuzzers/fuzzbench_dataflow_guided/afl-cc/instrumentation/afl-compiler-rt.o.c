@@ -103,8 +103,12 @@ char *strcasestr(const char *haystack, const char *needle);
 static u8  __afl_area_initial[MAP_INITIAL_SIZE];
 static u8 *__afl_area_ptr_dummy = __afl_area_initial;
 static u8 *__afl_area_ptr_backup = __afl_area_initial;
+static u8  __afl_dataflow_initial[MAP_INITIAL_SIZE];
+static u8 *__afl_dataflow_ptr_dummy = __afl_dataflow_initial;
+static u8 *__afl_dataflow_ptr_backup = __afl_dataflow_initial;
 
 u8        *__afl_area_ptr = __afl_area_initial;
+u8        *__afl_dataflow_ptr = __afl_dataflow_initial;
 u8        *__afl_dictionary;
 u8        *__afl_fuzz_ptr;
 static u32 __afl_fuzz_len_dummy;
@@ -113,7 +117,7 @@ int        __afl_sharedmem_fuzzing __attribute__((weak));
 
 u32 last_edge = 0;
 u32 __afl_final_loc;
-u32 __afl_map_size = MAP_SIZE;
+u32 __afl_map_size = 2621440 / 2; // MAP_SIZE;
 u32 __afl_dictionary_len;
 u64 __afl_map_addr;
 u32 __afl_first_final_loc;
@@ -348,7 +352,10 @@ static void __afl_map_shm(void) {
   __afl_already_initialized_shm = 1;
 
   // if we are not running in afl ensure the map exists
-  if (!__afl_area_ptr) { __afl_area_ptr = __afl_area_ptr_dummy; }
+  if (!__afl_area_ptr) { 
+    __afl_area_ptr = __afl_area_ptr_dummy; 
+    __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
+  }
 
   char *id_str = getenv(SHM_ENV_VAR);
 
@@ -480,9 +487,11 @@ static void __afl_map_shm(void) {
     fprintf(
         stderr,
         "DEBUG: (1) id_str %s, __afl_area_ptr %p, __afl_area_initial %p, "
+        "__afl_dataflow_ptr %p, "
         "__afl_area_ptr_dummy %p, __afl_map_addr 0x%llx, MAP_SIZE %u, "
         "__afl_final_loc %u, __afl_map_size %u, max_size_forkserver %u/0x%x\n",
         id_str == NULL ? "<null>" : id_str, __afl_area_ptr, __afl_area_initial,
+        __afl_dataflow_ptr,
         __afl_area_ptr_dummy, __afl_map_addr, MAP_SIZE, __afl_final_loc,
         __afl_map_size, FS_OPT_MAX_MAPSIZE, FS_OPT_MAX_MAPSIZE);
 
@@ -495,7 +504,7 @@ static void __afl_map_shm(void) {
 
       if (__afl_map_addr) {
 
-        munmap((void *)__afl_map_addr, __afl_final_loc);
+        munmap((void *)__afl_map_addr, 2 * __afl_final_loc);
 
       } else {
 
@@ -504,6 +513,7 @@ static void __afl_map_shm(void) {
       }
 
       __afl_area_ptr = __afl_area_ptr_dummy;
+      __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
 
     }
 
@@ -526,12 +536,12 @@ static void __afl_map_shm(void) {
     if (__afl_map_addr) {
 
       shm_base =
-          mmap((void *)__afl_map_addr, __afl_map_size, PROT_READ | PROT_WRITE,
+          mmap((void *)__afl_map_addr, 2 * __afl_map_size, PROT_READ | PROT_WRITE,
                MAP_FIXED_NOREPLACE | MAP_SHARED, shm_fd, 0);
 
     } else {
 
-      shm_base = mmap(0, __afl_map_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+      shm_base = mmap(0, 2 * __afl_map_size, PROT_READ | PROT_WRITE, MAP_SHARED,
                       shm_fd, 0);
 
     }
@@ -554,6 +564,7 @@ static void __afl_map_shm(void) {
     }
 
     __afl_area_ptr = shm_base;
+    __afl_dataflow_ptr = __afl_area_ptr + __afl_map_size;
 #else
     u32 shm_id = atoi(id_str);
 
@@ -571,6 +582,7 @@ static void __afl_map_shm(void) {
     }
 
     __afl_area_ptr = (u8 *)shmat(shm_id, (void *)__afl_map_addr, 0);
+    __afl_dataflow_ptr = __afl_area_ptr + __afl_map_size;
 
     /* Whooooops. */
 
@@ -598,8 +610,9 @@ static void __afl_map_shm(void) {
              __afl_map_addr) {
 
     __afl_area_ptr = (u8 *)mmap(
-        (void *)__afl_map_addr, __afl_map_size, PROT_READ | PROT_WRITE,
+        (void *)__afl_map_addr, 2 * __afl_map_size, PROT_READ | PROT_WRITE,
         MAP_FIXED_NOREPLACE | MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    __afl_dataflow_ptr = __afl_area_ptr + __afl_map_size;
 
     if (__afl_area_ptr == MAP_FAILED) {
 
@@ -620,9 +633,11 @@ static void __afl_map_shm(void) {
 
     }
 
-    __afl_area_ptr_dummy = (u8 *)malloc(__afl_final_loc);
+    __afl_area_ptr_dummy = (u8 *)malloc(2 * __afl_final_loc);
     __afl_area_ptr = __afl_area_ptr_dummy;
     __afl_map_size = __afl_final_loc;
+    __afl_dataflow_ptr_dummy = __afl_area_ptr_dummy + __afl_map_size;
+    __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
 
     if (!__afl_area_ptr_dummy) {
 
@@ -636,6 +651,7 @@ static void __afl_map_shm(void) {
   }  // else: nothing to be done
 
   __afl_area_ptr_backup = __afl_area_ptr;
+  __afl_dataflow_ptr_backup = __afl_dataflow_ptr;
 
   if (__afl_debug) {
 
@@ -655,13 +671,15 @@ static void __afl_map_shm(void) {
 
     if (__afl_map_size > MAP_INITIAL_SIZE) {
 
-      __afl_area_ptr_dummy = (u8 *)malloc(__afl_map_size);
+      __afl_area_ptr_dummy = (u8 *)malloc(2 * __afl_map_size);
+      __afl_dataflow_ptr_dummy = __afl_area_ptr_dummy + __afl_map_size;
 
       if (__afl_area_ptr_dummy) {
 
         if (__afl_selective_coverage_start_off) {
 
           __afl_area_ptr = __afl_area_ptr_dummy;
+          __afl_dataflow_ptr = __afl_area_ptr + __afl_map_size;
 
         }
 
@@ -789,7 +807,7 @@ static void __afl_unmap_shm(void) {
 
 #ifdef USEMMAP
 
-    munmap((void *)__afl_area_ptr, __afl_map_size);
+    munmap((void *)__afl_area_ptr, 2 * __afl_map_size);
 
 #else
 
@@ -801,11 +819,12 @@ static void __afl_unmap_shm(void) {
 
              __afl_map_addr) {
 
-    munmap((void *)__afl_map_addr, __afl_map_size);
+    munmap((void *)__afl_map_addr, 2 * __afl_map_size);
 
   }
 
   __afl_area_ptr = __afl_area_ptr_dummy;
+  __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
 
   id_str = getenv(CMPLOG_SHM_ENV_VAR);
 
@@ -1393,6 +1412,7 @@ int __afl_persistent_loop(unsigned int max_cnt) {
         dummy output region. */
 
     __afl_area_ptr = __afl_area_ptr_dummy;
+    __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
 
     return 0;
 
@@ -1412,7 +1432,10 @@ void __afl_manual_init(void) {
     init_done = 1;
     is_persistent = 0;
     __afl_sharedmem_fuzzing = 0;
-    if (__afl_area_ptr == NULL) __afl_area_ptr = __afl_area_ptr_dummy;
+    if (__afl_area_ptr == NULL) {
+      __afl_area_ptr = __afl_area_ptr_dummy;
+      __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
+    }
 
     if (__afl_debug) {
 
@@ -1510,7 +1533,7 @@ __attribute__((constructor(1))) void __afl_auto_second(void) {
       free(__afl_area_ptr);
 
     if (__afl_map_addr)
-      ptr = (u8 *)mmap((void *)__afl_map_addr, __afl_first_final_loc,
+      ptr = (u8 *)mmap((void *)__afl_map_addr, 2 * __afl_first_final_loc,
                        PROT_READ | PROT_WRITE,
                        MAP_FIXED_NOREPLACE | MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     else
@@ -1521,6 +1544,9 @@ __attribute__((constructor(1))) void __afl_auto_second(void) {
       __afl_area_ptr = ptr;
       __afl_area_ptr_dummy = __afl_area_ptr;
       __afl_area_ptr_backup = __afl_area_ptr;
+      __afl_dataflow_ptr = ptr + __afl_first_final_loc;
+      __afl_dataflow_ptr_dummy = __afl_dataflow_ptr;
+      __afl_dataflow_ptr_backup = __afl_dataflow_ptr;
 
     }
 
@@ -1593,6 +1619,8 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
   }
 
   */
+
+  last_edge = *guard;
 
 #if (LLVM_VERSION_MAJOR < 9)
 
@@ -1911,59 +1939,6 @@ void __sanitizer_cov_pcs_init(const uintptr_t *pcs_beg,
 
 #endif  // __AFL_CODE_COVERAGE
 
-/* Deal with dataflow sanitizer! */
-
-void __tag_input_with_labels(
-    unsigned char *input, 
-    size_t input_len,
-    size_t *label_start_offsets, 
-    size_t *label_block_len, 
-    int num_labels
-) {
-    dfsan_flush();
-    dfsan_label labels[8] = {1, 2, 4, 8, 16, 32, 64, 128};
-    for (int i = 0; i < num_labels; i++) {
-      dfsan_set_label(labels[i], input + label_start_offsets[i], label_block_len[i]);
-      if (__afl_debug) {
-        fprintf(stderr, "Setting label %hhu [%lu..%lu)\n", 
-                labels[i], label_start_offsets[i], label_start_offsets[i] + label_block_len[i]);
-      }
-    }
-
-    // do not reset labels as below; this breaks the callback somehow
-    // dfsan_set_label(0, input, input_len);
-}
-
-void dfsan_add_labels(u8 *input, size_t input_len) {
-  u32 pos = 0;
-  size_t label_start_offsets[8];
-  size_t label_block_lens[8];
-  u8 num_labels = 0;
-  // u8 num_labels = __afl_dataflow_ptr[pos];
-  // pos++;
-  // for (u8 i = 0; i < num_labels; i++) {
-  //   label_start_offsets[i] = (
-  //     ((u32)__afl_dataflow_ptr[pos] << 24) |
-  //     ((u32)__afl_dataflow_ptr[pos+1] << 16) |
-  //     ((u32)__afl_dataflow_ptr[pos+2] << 8) |
-  //     ((u32)__afl_dataflow_ptr[pos+3])
-  //   );
-  //   pos += 4;
-
-  //   label_block_lens[i] = (
-  //     ((u32)__afl_dataflow_ptr[pos] << 24) |
-  //     ((u32)__afl_dataflow_ptr[pos+1] << 16) |
-  //     ((u32)__afl_dataflow_ptr[pos+2] << 8) |
-  //     ((u32)__afl_dataflow_ptr[pos+3])
-  //   );
-  //   pos += 4;
-  // }
-
-  // ok, we got all the label details
-  // memset(__afl_dataflow_ptr, 0, __afl_map_size);
-  __tag_input_with_labels(input, input_len, label_start_offsets, label_block_lens, num_labels);
-}
-
 /* Init callback. Populates instrumentation IDs. Note that we're using
    ID of 0 as a special value to indicate non-instrumented bits. That may
    still touch the bitmap, but in a fairly harmless way. */
@@ -2097,50 +2072,9 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop) {
 
       }
 
-      static u32 offset = 5;
-
-      while (start < stop) {
-
-        if (!ignore_dso_after_fs &&
-            (likely(inst_ratio == 100) || R(100) < inst_ratio)) {
-
-          *(start++) = offset;
-
-        } else {
-
-          *(start++) = 0;  // write to map[0]
-
-        }
-
-        if (unlikely(++offset >= __afl_final_loc)) { offset = 5; }
-
-      }
-
     }
 
     return;  // we are done for this special case
-
-  }
-
-  /* Make sure that the first element in the range is always set - we use that
-     to avoid duplicate calls (which can happen as an artifact of the underlying
-     implementation in LLVM). */
-
-  if (__afl_final_loc < 5) __afl_final_loc = 5;  // we skip the first 5 entries
-
-  *(start++) = ++__afl_final_loc;
-
-  while (start < stop) {
-
-    if (likely(inst_ratio == 100) || R(100) < inst_ratio) {
-
-      *(start++) = ++__afl_final_loc;
-
-    } else {
-
-      *(start++) = 0;  // write to map[0]
-
-    }
 
   }
 
@@ -2190,7 +2124,7 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop) {
 
     }
 
-    __afl_map_size = __afl_final_loc + 1;
+    // __afl_map_size = __afl_final_loc + 1;
 
   }
 
@@ -2904,6 +2838,7 @@ void __afl_coverage_off() {
   if (likely(__afl_selective_coverage)) {
 
     __afl_area_ptr = __afl_area_ptr_dummy;
+    __afl_dataflow_ptr = __afl_dataflow_ptr_dummy;
     __afl_cmp_map = NULL;
 
   }
@@ -2916,6 +2851,7 @@ void __afl_coverage_on() {
   if (likely(__afl_selective_coverage && __afl_selective_coverage_temp)) {
 
     __afl_area_ptr = __afl_area_ptr_backup;
+    __afl_dataflow_ptr = __afl_dataflow_ptr_backup;
     if (__afl_cmp_map_backup) { __afl_cmp_map = __afl_cmp_map_backup; }
 
   }

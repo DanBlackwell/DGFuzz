@@ -76,6 +76,9 @@ extern unsigned char *__afl_fuzz_ptr;
 extern unsigned char *__afl_area_ptr;
 extern unsigned int   __afl_map_size;
 
+// AFL++ dataflow map
+extern unsigned char *__afl_dataflow_ptr;
+
 // libFuzzer interface is thin, so we don't include any libFuzzer headers.
 /* Using the weak attributed on LLVMFuzzerTestOneInput() breaks oss-fuzz but
    on the other hand this is what Google needs to make LLVMFuzzerRunDriver()
@@ -88,11 +91,69 @@ __attribute__((weak)) int     LLVMFuzzerRunDriver(
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin);
 
+/* Deal with dataflow sanitizer! */
+
+void __tag_input_with_labels(
+    unsigned char *input, 
+    size_t input_len,
+    size_t *label_start_offsets, 
+    size_t *label_block_len, 
+    int num_labels
+) {
+    dfsan_flush();
+    dfsan_label labels[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+    for (int i = 0; i < num_labels; i++) {
+      dfsan_set_label(labels[i], input + label_start_offsets[i], label_block_len[i]);
+      // if (__afl_debug) {
+        fprintf(stderr, "DEBUG [dfsan]: Setting label %hhu [%lu..%lu)\n", 
+                labels[i], label_start_offsets[i], label_start_offsets[i] + label_block_len[i]);
+      // }
+    }
+}
+
+void dfsan_add_labels(u8 *input, size_t input_len) {
+  fprintf(stderr, "area_ptr (map_size: %u): [", __afl_map_size);
+  for (int i = 0; i < 2 * __afl_map_size; i++) {
+    if (__afl_area_ptr[i]) fprintf(stderr, "%d: %hhu, ", i, __afl_area_ptr[i]);
+  }
+  fprintf(stderr, "]\n");
+
+  u32 pos = 0;
+  size_t label_start_offsets[8];
+  size_t label_block_lens[8];
+  u8 num_labels = __afl_dataflow_ptr[pos];
+  fprintf(stderr, "DEBUG [dfsan]: have %hhu labels: [", num_labels);
+  fflush(stderr);
+  pos++;
+  for (u8 i = 0; i < num_labels; i++) {
+    label_start_offsets[i] = (
+      ((u32)__afl_dataflow_ptr[pos] << 24) |
+      ((u32)__afl_dataflow_ptr[pos+1] << 16) |
+      ((u32)__afl_dataflow_ptr[pos+2] << 8) |
+      ((u32)__afl_dataflow_ptr[pos+3])
+    );
+    pos += 4;
+
+    label_block_lens[i] = (
+      ((u32)__afl_dataflow_ptr[pos] << 24) |
+      ((u32)__afl_dataflow_ptr[pos+1] << 16) |
+      ((u32)__afl_dataflow_ptr[pos+2] << 8) |
+      ((u32)__afl_dataflow_ptr[pos+3])
+    );
+    pos += 4;
+    fprintf(stderr, "{%lu, %lu}, ", label_start_offsets[i], label_start_offsets[i] + label_block_lens[i]);
+  }
+  fprintf(stderr, "]\n");
+
+  // ok, we got all the label details
+  memset(__afl_dataflow_ptr, 0, __afl_map_size);
+  __tag_input_with_labels(input, input_len, label_start_offsets, label_block_lens, num_labels);
+}
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
   // if (__afl_debug){
   // }
-  // __afl_dataflow_ptr[last_edge] = (u8)label;
   fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
+  __afl_dataflow_ptr[last_edge] = (u8)label;
 }
 
 void dfsan_init() {
@@ -410,10 +471,10 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
 
   assert(N > 0);
 
-  dfsan_init();
   fprintf(stderr, "DEBUG DAN: about to __afl_manual_init()\n");
   __afl_manual_init();
   fprintf(stderr, "DEBUG DAN: did __afl_manual_init()\n");
+  dfsan_init();
 
   // Call LLVMFuzzerTestOneInput here so that coverage caused by initialization
   // on the first execution of LLVMFuzzerTestOneInput is ignored.
@@ -433,7 +494,7 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
       size_t length = *__afl_fuzz_len;
 
       dfsan_flush();
-      dfsan_set_label(1, __afl_fuzz_ptr, length);
+      dfsan_add_labels(__afl_fuzz_ptr, length);
 
       if (likely(length)) {
 
