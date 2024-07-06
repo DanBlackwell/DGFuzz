@@ -117,7 +117,7 @@ int        __afl_sharedmem_fuzzing __attribute__((weak));
 
 u32 last_edge = 0;
 u32 __afl_final_loc;
-u32 __afl_map_size = 2621440 / 2; // MAP_SIZE;
+u32 __afl_map_size = 2621440 / 2; // Fix this to match DGFuzz map size
 u32 __afl_dictionary_len;
 u64 __afl_map_addr;
 u32 __afl_first_final_loc;

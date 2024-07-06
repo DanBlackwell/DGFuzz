@@ -22,7 +22,7 @@ pub fn main() {
         cc.add_pass(LLVMPasses::AutoTokens);
 
         if let Some(code) = cc
-            .dont_optimize()
+            // .dont_optimize()
             .cpp(is_cpp)
             // silence the compiler wrapper output, needed for some configure scripts.
             .silence(true)

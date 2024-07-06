@@ -645,19 +645,19 @@ void compiler_mode_by_callname(aflcc_state_t *aflcc) {
 
     aflcc->compiler_mode = CLANG;
 
-  } else if (strcmp(aflcc->callname, "afl-clang-cfg") == 0 ||
+  } else if (strcmp(aflcc->callname, "afl-clang-dgfuzz") == 0 ||
 
-             strcmp(aflcc->callname, "afl-clang-cfg++") == 0) {
+             strcmp(aflcc->callname, "afl-clang-dgfuzz++") == 0) {
 
-    printf("DAN set compiler_mode = CLANG\n");
     aflcc->cfg_mode = 1;
     aflcc->have_llvm = 1;
     aflcc->compiler_mode = LLVM;
     aflcc->instrument_mode = INSTRUMENT_CFG;
+    insert_param(aflcc, "-fsanitize=dataflow");
+    insert_param(aflcc, "-mllvm");
+    insert_param(aflcc, "-dfsan-conditional-callbacks=true");
 
   }
-
-  printf("DAN calling: %s\n", aflcc->callname);
 
 }
 
