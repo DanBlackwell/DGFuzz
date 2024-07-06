@@ -8,11 +8,11 @@ int add(int a, int b) {
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
-  fprintf(stderr, "got into LLVMFuzzerTestOneInput (DFSAN) len %lu: [", Size);
-  if (Size < 100) {
-    for (int i = 0; i < Size; i++) fprintf(stderr, "%hhu, ", Data[i]);
-  }
-  fprintf(stderr, "\b\b]\n");
+  // fprintf(stderr, "got into LLVMFuzzerTestOneInput (DFSAN) len %lu: [", Size);
+  // if (Size < 100) {
+  //   for (int i = 0; i < Size; i++) fprintf(stderr, "%hhu, ", Data[i]);
+  // }
+  // fprintf(stderr, "\b\b]\n");
 
   if (Size >= 8 && *(uint32_t *)Data == 0xaabbccdd) { abort(); }
   char buf[8] = {'a', 'b', 'c', 'd'};

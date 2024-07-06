@@ -202,21 +202,21 @@ where
         self.executor.run_target(fuzzer, state, manager, input)?;
 
         let mut labels_for_edge = HashMap::new();
-        // unsafe {
-        //     for i in 0..buf.len() {
-        //         if buf[i] != 0 {
-        //             let the_byte = buf[i];
-        //             let mut labels = vec![];
-        //             for bit in 0..8 {
-        //                 if (the_byte >> bit) & 1 == 1 {
-        //                     labels.push(bit + 1);
-        //                 }
-        //             }
-        //             labels_for_edge.insert(i, labels);
-        //             buf[i] = 0;
-        //         }
-        //     }
-        // }
+        unsafe {
+            for i in 0..buf.len() {
+                if buf[i] != 0 {
+                    let the_byte = buf[i];
+                    let mut labels = vec![];
+                    for bit in 0..8 {
+                        if (the_byte >> bit) & 1 == 1 {
+                            labels.push(bit + 1);
+                        }
+                    }
+                    labels_for_edge.insert(i, labels);
+                    buf[i] = 0;
+                }
+            }
+        }
 
         Ok(labels_for_edge)
     }
@@ -404,8 +404,9 @@ where
 
         // mutate these bytes
         for i in 0..128 {
+            if target_bytes.is_empty() { continue; }
+
             let mut input = BytesInput::new(target_bytes.clone());
-            println!("Original target bytes: {:?}", input.bytes());
 
             start_timer!(state);
             let mutated = mutator.mutate(state, &mut input, i)?;
@@ -423,7 +424,7 @@ where
             for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
                 bytes[*dest_pos] = altered_bytes[arr_idx];
             }
-            println!("Mutated target bytes {:?}, at pos {:?}; end result: {:?}", altered_bytes, target_byte_pos, bytes);
+            // println!("Mutated target bytes {:?}, at pos {:?}; end result: {:?}", altered_bytes, target_byte_pos, bytes);
 
             // Time is measured directly the `evaluate_input` function
             let (untransformed, post) = input.try_transform_into(state)?;
