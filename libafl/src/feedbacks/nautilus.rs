@@ -1,5 +1,5 @@
 //! Nautilus grammar mutator, see <https://github.com/nautilus-fuzz/nautilus>
-use alloc::string::String;
+use alloc::{borrow::Cow, string::String};
 use core::{fmt::Debug, marker::PhantomData};
 use std::fs::create_dir_all;
 
@@ -15,8 +15,8 @@ use crate::{
     generators::NautilusContext,
     inputs::NautilusInput,
     observers::ObserversTuple,
-    state::{HasCorpus, HasMetadata, State},
-    Error,
+    state::{HasCorpus, State},
+    Error, HasMetadata,
 };
 
 /// Metadata for Nautilus grammar mutator chunks
@@ -74,8 +74,9 @@ impl<'a, S> NautilusFeedback<'a, S> {
 }
 
 impl<'a, S> Named for NautilusFeedback<'a, S> {
-    fn name(&self) -> &str {
-        "NautilusFeedback"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("NautilusFeedback");
+        &NAME
     }
 }
 
@@ -99,9 +100,10 @@ where
         Ok(false)
     }
 
-    fn append_metadata<OT>(
+    fn append_metadata<EM, OT>(
         &mut self,
         state: &mut S,
+        _manager: &mut EM,
         _observers: &OT,
         testcase: &mut Testcase<S::Input>,
     ) -> Result<(), Error>

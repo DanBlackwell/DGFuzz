@@ -1,4 +1,7 @@
-use alloc::rc::{Rc, Weak};
+use alloc::{
+    borrow::Cow,
+    rc::{Rc, Weak},
+};
 use std::{
     cell::RefCell,
     marker::PhantomData,
@@ -8,11 +11,11 @@ use std::{
 
 use libafl::{
     corpus::Corpus,
-    inputs::{BytesInput, HasBytesVec, UsesInput},
+    inputs::{BytesInput, HasMutatorBytes, UsesInput},
     mutators::{
         ComposedByMutations, MutationId, MutationResult, Mutator, MutatorsTuple, ScheduledMutator,
     },
-    random_corpus_id,
+    random_corpus_id_with_disabled,
     state::{HasCorpus, HasMaxSize, HasRand},
     Error,
 };
@@ -87,7 +90,6 @@ struct MutatorProxy<'a, M, MT, S> {
     /// The result of mutation, to be propagated to the mutational stage
     result: Rc<RefCell<Result<MutationResult, Error>>>,
     /// Stage index, which is used by libafl mutator implementations
-    stage_idx: i32,
     phantom: PhantomData<(&'a mut (), MT)>,
 }
 
@@ -97,13 +99,11 @@ impl<'a, M, MT, S> MutatorProxy<'a, M, MT, S> {
         state: &'a mut S,
         mutator: &Rc<RefCell<M>>,
         result: &Rc<RefCell<Result<MutationResult, Error>>>,
-        stage_idx: i32,
     ) -> Self {
         Self {
             state: Rc::new(RefCell::new(state)),
             mutator: Rc::downgrade(mutator),
             result: result.clone(),
-            stage_idx,
             phantom: PhantomData,
         }
     }
@@ -126,7 +126,6 @@ impl<'a, M, MT, S> MutatorProxy<'a, M, MT, S> {
                 false
             },
             mutator: self.mutator.clone(),
-            stage_idx: self.stage_idx,
             result: self.result.clone(),
             phantom: PhantomData,
         }
@@ -143,7 +142,7 @@ struct WeakMutatorProxy<F, M, MT, S> {
     /// A weak reference to the mutator
     mutator: Weak<RefCell<M>>,
     /// The stage index to provide to the mutator, when executed.
-    stage_idx: i32,
+
     /// The result of mutation, to be propagated to the mutational stage
     result: Rc<RefCell<Result<MutationResult, Error>>>,
     phantom: PhantomData<(MT, S)>,
@@ -165,7 +164,7 @@ where
                         BytesInput::from(unsafe { core::slice::from_raw_parts(data, size) });
                     let old = state.max_size();
                     state.set_max_size(max_size);
-                    let res = mutator.scheduled_mutate(state, &mut intermediary, self.stage_idx);
+                    let res = mutator.scheduled_mutate(state, &mut intermediary);
                     state.set_max_size(old);
                     let succeeded = res.is_ok();
 
@@ -283,8 +282,9 @@ where
 }
 
 impl<MT, SM> Named for LLVMCustomMutator<MT, SM, false> {
-    fn name(&self) -> &str {
-        "LLVMCustomMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("LLVMCustomMutator");
+        &NAME
     }
 }
 
@@ -295,13 +295,8 @@ where
     SM: ScheduledMutator<BytesInput, MT, S> + 'static,
 {
     #[inline]
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut S::Input,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
-        self.scheduled_mutate(state, input, stage_idx)
+    fn mutate(&mut self, state: &mut S, input: &mut S::Input) -> Result<MutationResult, Error> {
+        self.scheduled_mutate(state, input)
     }
 }
 
@@ -325,7 +320,6 @@ where
         &mut self,
         state: &mut S,
         input: &mut S::Input,
-        stage_idx: i32,
     ) -> Result<MutationResult, Error> {
         let seed = state.rand_mut().next();
         let target = input.bytes();
@@ -335,7 +329,7 @@ where
 
         // we assume that the fuzzer did not use this mutator, but instead utilised their own
         let result = Rc::new(RefCell::new(Ok(MutationResult::Mutated)));
-        let proxy = MutatorProxy::new(state, &self.mutator, &result, stage_idx);
+        let proxy = MutatorProxy::new(state, &self.mutator, &result);
         let old = MUTATOR.with(|mutator| {
             let mut mutator = mutator.borrow_mut();
             mutator.replace(Box::new(proxy.weak()))
@@ -357,14 +351,15 @@ where
             return result.replace(Ok(MutationResult::Skipped));
         }
         bytes.truncate(new_size);
-        core::mem::swap(input.bytes_mut(), &mut bytes);
+        input.bytes_mut().copy_from_slice(&bytes);
         Ok(MutationResult::Mutated)
     }
 }
 
 impl<MT, SM> Named for LLVMCustomMutator<MT, SM, true> {
-    fn name(&self) -> &str {
-        "LLVMCustomCrossover"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("LLVMCustomCrossover");
+        &NAME
     }
 }
 
@@ -375,13 +370,8 @@ where
     SM: ScheduledMutator<BytesInput, MT, S> + 'static,
 {
     #[inline]
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut S::Input,
-        stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
-        self.scheduled_mutate(state, input, stage_idx)
+    fn mutate(&mut self, state: &mut S, input: &mut S::Input) -> Result<MutationResult, Error> {
+        self.scheduled_mutate(state, input)
     }
 }
 
@@ -405,17 +395,16 @@ where
         &mut self,
         state: &mut S,
         input: &mut S::Input,
-        stage_idx: i32,
     ) -> Result<MutationResult, Error> {
         // We don't want to use the testcase we're already using for splicing
-        let idx = random_corpus_id!(state.corpus(), state.rand_mut());
+        let idx = random_corpus_id_with_disabled!(state.corpus(), state.rand_mut());
         if let Some(cur) = state.corpus().current() {
             if idx == *cur {
                 return Ok(MutationResult::Skipped);
             }
         }
 
-        let mut other_testcase = state.corpus().get(idx)?.borrow_mut();
+        let mut other_testcase = state.corpus().get_from_all(idx)?.borrow_mut();
         let other = other_testcase.load_input(state.corpus())?;
         let data2 = Vec::from(other.bytes());
         drop(other_testcase);
@@ -426,7 +415,7 @@ where
 
         // we assume that the fuzzer did not use this mutator, but instead utilised their own
         let result = Rc::new(RefCell::new(Ok(MutationResult::Mutated)));
-        let proxy = MutatorProxy::new(state, &self.mutator, &result, stage_idx);
+        let proxy = MutatorProxy::new(state, &self.mutator, &result);
         let old = MUTATOR.with(|mutator| {
             let mut mutator = mutator.borrow_mut();
             mutator.replace(Box::new(proxy.weak()))
@@ -451,7 +440,7 @@ where
             return result.replace(Ok(MutationResult::Skipped));
         }
         out.truncate(new_size);
-        core::mem::swap(input.bytes_mut(), &mut out);
+        input.bytes_mut().copy_from_slice(&out);
         Ok(MutationResult::Mutated)
     }
 }

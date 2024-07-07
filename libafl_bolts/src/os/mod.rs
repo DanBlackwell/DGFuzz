@@ -9,6 +9,8 @@ pub mod unix_shmem_server;
 
 #[cfg(unix)]
 pub mod unix_signals;
+#[cfg(unix)]
+pub use unix_signals::CTRL_C_EXIT;
 
 #[cfg(all(unix, feature = "std"))]
 pub mod pipes;
@@ -28,9 +30,10 @@ use std::{fs::File, os::fd::AsRawFd, sync::OnceLock};
 #[cfg(all(windows, feature = "std"))]
 #[allow(missing_docs, overflowing_literals)]
 pub mod windows_exceptions;
-
 #[cfg(unix)]
 use libc::pid_t;
+#[cfg(all(windows, feature = "std"))]
+pub use windows_exceptions::CTRL_C_EXIT;
 
 /// A file that we keep open, pointing to /dev/null
 #[cfg(all(feature = "std", unix))]
@@ -53,7 +56,7 @@ impl ChildHandle {
         unsafe {
             libc::waitpid(self.pid, &mut status, 0);
         }
-        status
+        libc::WEXITSTATUS(status)
     }
 }
 
@@ -107,7 +110,7 @@ pub fn startable_self() -> Result<Command, Error> {
 #[cfg(all(unix, feature = "std"))]
 pub fn dup(fd: RawFd) -> Result<RawFd, Error> {
     match unsafe { libc::dup(fd) } {
-        -1 => Err(Error::file(std::io::Error::last_os_error())),
+        -1 => Err(Error::last_os_error(format!("Error calling dup({fd})"))),
         new_fd => Ok(new_fd),
     }
 }
@@ -119,7 +122,9 @@ pub fn dup(fd: RawFd) -> Result<RawFd, Error> {
 #[cfg(all(unix, feature = "std"))]
 pub fn dup2(fd: RawFd, device: RawFd) -> Result<(), Error> {
     match unsafe { libc::dup2(fd, device) } {
-        -1 => Err(Error::file(std::io::Error::last_os_error())),
+        -1 => Err(Error::last_os_error(format!(
+            "Error calling dup2({fd}, {device})"
+        ))),
         _ => Ok(()),
     }
 }

@@ -1,35 +1,36 @@
 //! # Concolic Tracing Serialization Format
+//!
 //! ## Design Goals
 //! * The serialization format for concolic tracing was developed with the goal of being space and time efficient.
 //! * Additionally, it should be easy to maintain and extend.
 //! * It does not have to be compatible with other programming languages.
 //! * It should be resilient to crashes. Since we are fuzzing, we are expecting the traced program to crash at some
-//! point.
+//!   point.
 //!
 //! The format as implemented fulfils these design goals.
 //! Specifically:
 //! * it requires only constant memory space for serialization, which allows for tracing complex and/or
-//! long-running programs.
+//!   long-running programs.
 //! * the trace itself requires little space. A typical binary operation (such as an add) typically takes just 3 bytes.
 //! * it easy to encode. There is no translation between the interface of the runtime itself and the trace it generates.
 //! * it is similarly easy to decode and can be easily translated into an in-memory AST without overhead, because
-//! expressions are decoded from leaf to root instead of root to leaf.
+//!   expressions are decoded from leaf to root instead of root to leaf.
 //! * At its core, it is just [`SymExpr`]s, which can be added to, modified and removed from with ease. The
-//! definitions are automatically shared between the runtime and the consuming program, since both depend on the same
-//! `LibAFL`.
+//!   definitions are automatically shared between the runtime and the consuming program, since both depend on the same
+//!   `LibAFL`.
 //!
 //! ## Techniques
 //! The serialization format applies multiple techniques to achieve its goals.
 //! * It uses bincode for efficient binary serialization. Crucially, bincode uses variable length integer encoding,
-//! allowing it encode small integers use fewer bytes.
+//!   allowing it encode small integers use fewer bytes.
 //! * References to previous expressions are stored relative to the current expressions id. The vast majority of
-//! expressions refer to other expressions that were defined close to their use. Therefore, encoding relative references
-//! keeps references small. Therefore, they make optimal use of bincodes variable length integer encoding.
+//!   expressions refer to other expressions that were defined close to their use. Therefore, encoding relative references
+//!   keeps references small. Therefore, they make optimal use of bincodes variable length integer encoding.
 //! * Ids of expressions ([`SymExprRef`]s) are implicitly derived by their position in the message stream. Effectively,
-//! a counter is used to identify expressions.
+//!   a counter is used to identify expressions.
 //! * The current length of the trace in bytes in serialized in a fixed format at the beginning of the trace.
-//! This length is updated regularly when the trace is in a consistent state. This allows the reader to avoid reading
-//! malformed data if the traced process crashed.
+//!   This length is updated regularly when the trace is in a consistent state. This allows the reader to avoid reading
+//!   malformed data if the traced process crashed.
 //!
 //! ## Example
 //! The expression `SymExpr::BoolAnd { a: SymExpr::True, b: SymExpr::False }` would be encoded as:
@@ -40,8 +41,6 @@
 //! 5. 1 byte to reference b
 //!
 //! ... making for a total of 5 bytes.
-
-#![cfg(feature = "std")]
 
 use std::{
     fmt::{self, Debug, Formatter},
@@ -93,7 +92,7 @@ impl<R: Read> MessageFileReader<R> {
                 Some(Ok((message_id, message)))
             }
             Err(e) => match *e {
-                bincode::ErrorKind::Io(ref io_err) => match io_err.kind() {
+                ErrorKind::Io(ref io_err) => match io_err.kind() {
                     io::ErrorKind::UnexpectedEof => None,
                     _ => Some(Err(e)),
                 },
@@ -117,6 +116,7 @@ impl<R: Read> MessageFileReader<R> {
             SymExpr::InputByte { .. }
             | SymExpr::Integer { .. }
             | SymExpr::Integer128 { .. }
+            | SymExpr::IntegerFromBuffer { .. }
             | SymExpr::Float { .. }
             | SymExpr::NullPointer
             | SymExpr::True
@@ -290,6 +290,7 @@ impl<W: Write + Seek> MessageFileWriter<W> {
             SymExpr::InputByte { .. }
             | SymExpr::Integer { .. }
             | SymExpr::Integer128 { .. }
+            | SymExpr::IntegerFromBuffer { .. }
             | SymExpr::Float { .. }
             | SymExpr::NullPointer
             | SymExpr::True

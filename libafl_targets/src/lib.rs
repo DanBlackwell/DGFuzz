@@ -3,6 +3,9 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
+#![forbid(unexpected_cfgs)]
+// For `std::simd`
+#![cfg_attr(nightly, feature(portable_simd))]
 #![allow(
     clippy::unreadable_literal,
     clippy::type_repetition_in_bounds,
@@ -27,14 +30,12 @@
 ))]
 #![cfg_attr(test, deny(
     missing_debug_implementations,
-    missing_docs,
     //trivial_casts,
     trivial_numeric_casts,
     unused_extern_crates,
     unused_import_braces,
     unused_qualifications,
     unused_must_use,
-    missing_docs,
     //unused_results
 ))]
 #![cfg_attr(
@@ -66,9 +67,19 @@ extern crate alloc;
 
 include!(concat!(env!("OUT_DIR"), "/constants.rs"));
 
-#[cfg(any(feature = "sancov_pcguard_edges", feature = "sancov_pcguard_hitcounts",))]
+#[cfg(any(
+    feature = "sancov_pcguard_edges",
+    feature = "sancov_pcguard_hitcounts",
+    feature = "sancov_ngram4",
+    feature = "sancov_ctx"
+))]
 pub mod sancov_pcguard;
-#[cfg(any(feature = "sancov_pcguard_edges", feature = "sancov_pcguard_hitcounts",))]
+#[cfg(any(
+    feature = "sancov_pcguard_edges",
+    feature = "sancov_pcguard_hitcounts",
+    feature = "sancov_ngram4",
+    feature = "sancov_ctx"
+))]
 pub use sancov_pcguard::*;
 
 #[cfg(any(feature = "sancov_cmplog", feature = "sancov_value_profile"))]
@@ -78,6 +89,7 @@ pub use sancov_cmp::*;
 
 /// Module containing bindings to the various sanitizer interface headers
 #[cfg(feature = "sanitizer_interfaces")]
+#[allow(clippy::mixed_attributes_style)]
 pub mod sanitizer_ifaces {
     #![allow(non_snake_case)]
     #![allow(non_camel_case_types)]
@@ -87,6 +99,7 @@ pub mod sanitizer_ifaces {
     #![allow(clippy::unreadable_literal)]
     #![allow(missing_docs)]
     #![allow(missing_debug_implementations)]
+    #![allow(unused_qualifications)]
     include!(concat!(env!("OUT_DIR"), "/sanitizer_interfaces.rs"));
 }
 
@@ -107,6 +120,12 @@ pub use coverage::*;
 
 pub mod value_profile;
 pub use value_profile::*;
+
+/// The module to hook call instructions
+#[cfg(feature = "function-logging")]
+pub mod call;
+#[cfg(feature = "function-logging")]
+pub use call::*;
 
 /// runtime related to comparisons
 pub mod cmps;

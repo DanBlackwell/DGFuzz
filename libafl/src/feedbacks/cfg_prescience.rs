@@ -15,6 +15,20 @@ libafl_bolts::impl_serdeany!(CoverageMapIdx);
 pub struct BasicBlockUUID(u64);
 libafl_bolts::impl_serdeany!(BasicBlockUUID);
 
+
+/// Struct containing the details of a reachable CFG node (coverage map index)
+#[derive(Debug,PartialEq,Eq,Hash,Copy,Clone)]
+pub struct Reachability {
+    /// The coverage map index 
+    pub index: usize,
+    /// The depth of BFS at which this coverage map index was reached
+    pub depth: usize,
+    /// The coverage map index of the direct neighbour that
+    /// this index was reached from (ie parent/grandparent/great-grandparent)
+    pub direct_neighbour_ancestor_index: usize,
+}
+
+
 #[derive(Clone,Debug,Serialize,Deserialize)]
 /// Struct storing the relevant details for a basic block in the control flow graph
 pub struct ControlFlowGraphBB {
@@ -186,6 +200,11 @@ impl ControlFlowGraph {
     /// Is this CFG populated?
     pub fn is_empty(&self) -> bool {
         self.all_edges.is_empty()
+    }
+
+    /// Return the number of edges in the CFG
+    pub fn all_edges_len(&self) -> usize {
+        self.all_edges.len()
     }
 
     /// Populate the control flow graph from the raw buffer (ie deserialise it)
@@ -707,18 +726,8 @@ impl ControlFlowGraph {
         &mut self, 
         input_coverage_map_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>
-    ) -> (HashSet<(usize, usize)>, HashSet<String>) {
-        self.get_all_neighbours_upto_depth(input_coverage_map_indexes, all_coverage_map_indexes, 99999)
-    }
+    ) -> Vec<Reachability> {
 
-    /// Return a set of all indexes reachable from the list of `coverage_map_indexes` and the set
-    /// of called functions
-    pub fn get_all_neighbours_upto_depth(
-        &mut self, 
-        input_coverage_map_indexes: &[usize],
-        all_coverage_map_indexes: &HashSet<usize>,
-        max_depth: usize,
-    ) -> (HashSet<(usize, usize)>, HashSet<String>) {
         let mut dupes = vec![];
         for idx in input_coverage_map_indexes {
             if self.duplicate_cov_map_idxs.contains(&CoverageMapIdx(*idx as u32)) {
@@ -731,25 +740,22 @@ impl ControlFlowGraph {
 
         // set any indexes we've already covered...
         let mut covered = all_coverage_map_indexes.clone();
-        let mut reachable = HashSet::new();
+        let mut reachable = vec![];
         let mut queue = VecDeque::new();
         for &idx in input_coverage_map_indexes {
-            queue.push_back((1, idx));
+            queue.push_back((1, idx, None));
         }
         let mut hit_functions = HashSet::new();
 
+
 //        assert!(input_coverage_map_indexes.clone().into_iter().copied().collect::<HashSet<usize>>().is_subset(all_coverage_map_indexes));
 
-        while let Some((depth, to_explore)) = queue.pop_front() {
+        while let Some((depth, to_explore, direct_neighbour_predecessor)) = queue.pop_front() {
 
             debug_assert!(covered.contains(&to_explore), "to_explore: {to_explore}, covered: {:?}", covered);
 
             if to_explore >= 1_000_000 {
                 // can't follow an indirect call...
-                continue;
-            }
-
-            if depth > max_depth {
                 continue;
             }
 
@@ -762,8 +768,13 @@ impl ControlFlowGraph {
                     if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
                         for neighbour in neighbours {
                             if covered.insert(neighbour.0 as usize) {
-                                reachable.insert((depth, neighbour.0 as usize));
-                                queue.push_back((depth + 1, neighbour.0 as usize));
+                                let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(neighbour.0 as usize);
+                                reachable.push(Reachability {
+                                    index: neighbour.0 as usize, 
+                                    depth, 
+                                    direct_neighbour_ancestor_index
+                                });
+                                queue.push_back((depth + 1, neighbour.0 as usize, Some(direct_neighbour_ancestor_index)));
                             }
                         }
                     }
@@ -781,8 +792,13 @@ impl ControlFlowGraph {
                        if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
                            for neighbour in neighbours {
                                if covered.insert(neighbour.0 as usize) {
-                                    reachable.insert((depth, neighbour.0 as usize));
-                                    queue.push_back((depth + 1, neighbour.0 as usize));
+                                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(neighbour.0 as usize);
+                                    reachable.push(Reachability {
+                                        index: neighbour.0 as usize, 
+                                        depth, 
+                                        direct_neighbour_ancestor_index
+                                    });
+                                    queue.push_back((depth + 1, neighbour.0 as usize, Some(direct_neighbour_ancestor_index)));
                                }
                            }
                        }
@@ -794,28 +810,43 @@ impl ControlFlowGraph {
 
             for instr_cov_map_idx in bb.instrumented_instructions_cov_map_idxs.clone() {
                 if covered.insert(instr_cov_map_idx.0 as usize) {
-                    reachable.insert((depth, instr_cov_map_idx.0 as usize));
+                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(instr_cov_map_idx.0 as usize);
+                    reachable.push(Reachability {
+                        index: instr_cov_map_idx.0 as usize, 
+                        depth, 
+                        direct_neighbour_ancestor_index
+                    });
                 }
             }
 
             for indirect_call_num in 0..bb.num_indirect_calls {
                 // create a unique ID for this indirect call based on the coverage map index
-                let idx = 1_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
-                if covered.insert(idx) {
-                    reachable.insert((depth, idx));
+                let index = 1_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
+                if covered.insert(index) {
+                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(index);
+                    reachable.push(Reachability {
+                        index,
+                        depth, 
+                        direct_neighbour_ancestor_index
+                    });
                 }
             }
 
             for successor in self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned() {
                 let map_idx = successor.0 as usize;
                 if covered.insert(map_idx) {
-                    reachable.insert((depth, map_idx));
-                    queue.push_back((depth + 1, map_idx));
+                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(map_idx);
+                    reachable.push(Reachability {
+                        index: map_idx,
+                        depth, 
+                        direct_neighbour_ancestor_index
+                    });
+                    queue.push_back((depth + 1, map_idx, Some(direct_neighbour_ancestor_index)));
                 }
             }
         }
 
-        (reachable, hit_functions)
+        reachable
     }
 
     /// Get a list of the functions hit by a list of coverage map indexes

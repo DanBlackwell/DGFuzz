@@ -7,6 +7,7 @@ The tinyinst module for `LibAFL`.
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
+#![forbid(unexpected_cfgs)]
 #![allow(
     clippy::unreadable_literal,
     clippy::type_repetition_in_bounds,
@@ -32,14 +33,12 @@ The tinyinst module for `LibAFL`.
 ))]
 #![cfg_attr(test, deny(
     missing_debug_implementations,
-    missing_docs,
     //trivial_casts,
     trivial_numeric_casts,
     unused_extern_crates,
     unused_import_braces,
     unused_qualifications,
     unused_must_use,
-    missing_docs,
     //unused_results
 ))]
 #![cfg_attr(

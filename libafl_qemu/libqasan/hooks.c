@@ -480,7 +480,7 @@ char *strndup(const char *s, size_t n) {
   QASAN_LOAD(s, l + 1);
   void *r = __libqasan_malloc(l + 1);
   __libqasan_memcpy(r, s, l);
-  ((char*)r)[l] = 0;
+  ((char *)r)[l] = 0;
   QASAN_DEBUG("\t\t = %p\n", r);
 
   return r;
@@ -631,4 +631,24 @@ int vasprintf(char **restrict strp, const char *restrict fmt, va_list ap) {
   QASAN_DEBUG("\t\t = %d [*strp = %p]\n", len, *strp);
 
   return len;
+}
+
+void *mmap(void *addr, size_t length, int prot, int flags, int fd,
+           off_t offset) {
+  void *rtv = __builtin_return_address(0);
+  QASAN_DEBUG("%14p: mmap(%p, %zu, %d, %d, %d, %ld)\n", rtv, addr, length, prot,
+              flags, fd, offset);
+  void *r = __libqasan_mmap(addr, length, prot, flags, fd, offset);
+  QASAN_DEBUG("\t\t = %p\n", r);
+
+  return r;
+}
+
+int munmap(void *addr, size_t length) {
+  void *rtv = __builtin_return_address(0);
+  QASAN_DEBUG("%14p: munmap(%p, %zu)\n", rtv, addr, length);
+  int r = __libqasan_munmap(addr, length);
+  QASAN_DEBUG("\t\t = %d\n", r);
+
+  return r;
 }

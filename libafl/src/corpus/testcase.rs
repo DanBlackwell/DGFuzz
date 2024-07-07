@@ -1,4 +1,4 @@
-//! The testcase is a struct embedded in each corpus.
+//! The [`Testcase`] is a struct embedded in each [`Corpus`].
 //! It will contain a respective input, and metadata.
 
 use alloc::string::String;
@@ -16,8 +16,7 @@ use super::Corpus;
 use crate::{
     corpus::CorpusId,
     inputs::{Input, UsesInput},
-    state::HasMetadata,
-    Error,
+    Error, HasMetadata,
 };
 
 /// Shorthand to receive a [`Ref`] or [`RefMut`] to a stored [`Testcase`], by [`CorpusId`].
@@ -35,7 +34,7 @@ pub trait HasTestcase: UsesInput {
     ) -> Result<RefMut<Testcase<<Self as UsesInput>::Input>>, Error>;
 }
 
-/// An entry in the Testcase Corpus
+/// An entry in the [`Testcase`] Corpus
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "I: serde::de::DeserializeOwned")]
 pub struct Testcase<I>
@@ -59,11 +58,15 @@ where
     /// Cached len of the input, if any
     cached_len: Option<usize>,
     /// Number of executions done at discovery time
-    executions: usize,
-    /// Number of fuzzing iterations of this particular input updated in perform_mutational
+    executions: u64,
+    /// Number of fuzzing iterations of this particular input updated in `perform_mutational`
     scheduled_count: usize,
     /// Parent [`CorpusId`], if known
     parent_id: Option<CorpusId>,
+    /// If the testcase is "disabled"
+    disabled: bool,
+    /// has found crash (or timeout) or not
+    objectives_found: usize,
 }
 
 impl<I> HasMetadata for Testcase<I>
@@ -174,13 +177,13 @@ where
 
     /// Get the executions
     #[inline]
-    pub fn executions(&self) -> &usize {
+    pub fn executions(&self) -> &u64 {
         &self.executions
     }
 
     /// Get the executions (mutable)
     #[inline]
-    pub fn executions_mut(&mut self) -> &mut usize {
+    pub fn executions_mut(&mut self) -> &mut u64 {
         &mut self.executions
     }
 
@@ -194,6 +197,18 @@ where
     #[inline]
     pub fn set_scheduled_count(&mut self, scheduled_count: usize) {
         self.scheduled_count = scheduled_count;
+    }
+
+    /// Get `disabled`
+    #[inline]
+    pub fn disabled(&mut self) -> bool {
+        self.disabled
+    }
+
+    /// Set the testcase as disabled
+    #[inline]
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.disabled = disabled;
     }
 
     /// Create a new Testcase instance given an input
@@ -213,6 +228,8 @@ where
             executions: 0,
             scheduled_count: 0,
             parent_id: None,
+            disabled: false,
+            objectives_found: 0,
         }
     }
 
@@ -233,6 +250,8 @@ where
             executions: 0,
             scheduled_count: 0,
             parent_id: Some(parent_id),
+            disabled: false,
+            objectives_found: 0,
         }
     }
 
@@ -253,12 +272,14 @@ where
             executions: 0,
             scheduled_count: 0,
             parent_id: None,
+            disabled: false,
+            objectives_found: 0,
         }
     }
 
     /// Create a new Testcase instance given an [`Input`] and the number of executions
     #[inline]
-    pub fn with_executions(mut input: I, executions: usize) -> Self {
+    pub fn with_executions(mut input: I, executions: u64) -> Self {
         input.wrapped_as_testcase();
         Self {
             input: Some(input),
@@ -273,6 +294,8 @@ where
             executions,
             scheduled_count: 0,
             parent_id: None,
+            disabled: false,
+            objectives_found: 0,
         }
     }
 
@@ -290,6 +313,16 @@ where
     /// Sets the id of the parent, that this testcase was derived from
     pub fn set_parent_id_optional(&mut self, parent_id: Option<CorpusId>) {
         self.parent_id = parent_id;
+    }
+
+    /// Gets how many objectives were found by mutating this testcase
+    pub fn objectives_found(&self) -> usize {
+        self.objectives_found
+    }
+
+    /// Adds one objectives to the `objectives_found` counter. Mostly called from crash handler or executor.
+    pub fn found_objective(&mut self) {
+        self.objectives_found = self.objectives_found.saturating_add(1);
     }
 }
 
@@ -313,6 +346,8 @@ where
             file_path: None,
             #[cfg(feature = "std")]
             metadata_path: None,
+            disabled: false,
+            objectives_found: 0,
         }
     }
 }
@@ -359,6 +394,16 @@ where
     }
 }
 
+
+/// Metadata storing the number of mutations executed for this testcase
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TestcaseMutationsMetadata {
+    /// Number of mutants generated and executed for this testcase
+    pub num_mutations_executed: usize
+}
+libafl_bolts::impl_serdeany!(TestcaseMutationsMetadata);
+
+
 /// The Metadata for each testcase used in power schedules.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[cfg_attr(
@@ -366,15 +411,15 @@ where
     allow(clippy::unsafe_derive_deserialize)
 )] // for SerdeAny
 pub struct SchedulerTestcaseMetadata {
-    /// Number of bits set in bitmap, updated in calibrate_case
+    /// Number of bits set in bitmap, updated in `calibrate_case`
     bitmap_size: u64,
     /// Number of queue cycles behind
     handicap: u64,
-    /// Path depth, initialized in on_add
+    /// Path depth, initialized in `on_add`
     depth: u64,
-    /// Offset in n_fuzz
+    /// Offset in `n_fuzz`
     n_fuzz_entry: usize,
-    /// Cycles used to calibrate this (not really needed if it were not for on_replace and on_remove)
+    /// Cycles used to calibrate this (not really needed if it were not for `on_replace` and `on_remove`)
     cycle_and_time: (Duration, usize),
 }
 
@@ -483,93 +528,5 @@ where
             path.set_file_name(lockname);
             let _ = std::fs::remove_file(path);
         }
-    }
-}
-
-#[cfg(feature = "python")]
-#[allow(missing_docs)]
-/// `Testcase` Python bindings
-pub mod pybind {
-    use alloc::{boxed::Box, vec::Vec};
-
-    use libafl_bolts::ownedref::OwnedMutPtr;
-    use pyo3::{prelude::*, types::PyDict};
-
-    use super::{HasMetadata, Testcase};
-    use crate::{inputs::BytesInput, pybind::PythonMetadata};
-
-    /// `PythonTestcase` with fixed generics
-    pub type PythonTestcase = Testcase<BytesInput>;
-
-    #[pyclass(unsendable, name = "Testcase")]
-    #[derive(Debug)]
-    /// Python class for Testcase
-    pub struct PythonTestcaseWrapper {
-        /// Rust wrapped Testcase object
-        pub inner: OwnedMutPtr<PythonTestcase>,
-    }
-
-    impl PythonTestcaseWrapper {
-        pub fn wrap(r: &mut PythonTestcase) -> Self {
-            Self {
-                inner: OwnedMutPtr::Ptr(r),
-            }
-        }
-
-        #[must_use]
-        pub fn unwrap(&self) -> &PythonTestcase {
-            self.inner.as_ref()
-        }
-
-        pub fn unwrap_mut(&mut self) -> &mut PythonTestcase {
-            self.inner.as_mut()
-        }
-    }
-
-    #[pymethods]
-    impl PythonTestcaseWrapper {
-        #[new]
-        fn new(input: Vec<u8>) -> Self {
-            Self {
-                inner: OwnedMutPtr::Owned(Box::new(PythonTestcase::new(BytesInput::new(input)))),
-            }
-        }
-
-        #[getter]
-        fn exec_time_ms(&self) -> Option<u128> {
-            self.inner.as_ref().exec_time().map(|t| t.as_millis())
-        }
-
-        #[getter]
-        fn executions(&self) -> usize {
-            *self.inner.as_ref().executions()
-        }
-
-        #[getter]
-        fn parent_id(&self) -> Option<usize> {
-            self.inner.as_ref().parent_id().map(|x| x.0)
-        }
-
-        #[getter]
-        fn scheduled_count(&self) -> usize {
-            self.inner.as_ref().scheduled_count()
-        }
-
-        fn metadata(&mut self) -> PyObject {
-            let meta = self.inner.as_mut().metadata_map_mut();
-            if !meta.contains::<PythonMetadata>() {
-                Python::with_gil(|py| {
-                    let dict: Py<PyDict> = PyDict::new(py).into();
-                    meta.insert(PythonMetadata::new(dict.to_object(py)));
-                });
-            }
-            meta.get::<PythonMetadata>().unwrap().map.clone()
-        }
-    }
-
-    /// Register the classes to the python module
-    pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
-        m.add_class::<PythonTestcaseWrapper>()?;
-        Ok(())
     }
 }

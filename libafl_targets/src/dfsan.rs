@@ -14,25 +14,26 @@ use libafl_bolts::{
     rands::Rand, 
     tuples::{tuple_list, tuple_list_type, MatchName}, 
     AsSlice, 
-    AsMutSlice,
+    AsSliceMut,
     prelude::{OwnedMutSlice, ShMemProvider, UnixShMemProvider},
     shmem::ShMem,
 };
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    corpus::{Corpus, HasCurrentCorpusIdx}, 
+    common::HasMetadata,
+    corpus::{Corpus, HasCurrentCorpusId}, 
     events::{EventFirer, EventRestarter}, 
     executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, 
     feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, 
-    inputs::{BytesInput, HasBytesVec, HasTargetBytes, UsesInput}, 
+    inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, 
     mark_feature_time, 
     mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, 
     observers::{MapObserver, ObserversTuple}, 
     prelude::{HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver, ForkserverExecutor, }, 
     stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, 
     start_timer, 
-    state::{HasCorpus, HasMetadata, HasRand, UsesState}, 
+    state::{HasCorpus, HasRand, UsesState}, 
     Error, 
     Evaluator, 
     ExecuteInputResult,
@@ -121,7 +122,7 @@ impl<'a, EM, E, Z> DataflowStage<'a, EM, E, Z>
 where 
     E: UsesState + UsesInput, 
     E::State: HasRand, 
-    E::Input: HasBytesVec + HasTargetBytes,
+    E::Input: HasMutatorBytes + HasTargetBytes,
 {
     pub fn new(
         dfsan_binary_path: PathBuf, 
@@ -141,8 +142,8 @@ where
     
         let mut fs_builder = ForkserverExecutor::builder()
             .program(dfsan_binary_path)
-            .debug_child(true)
             .shmem_provider(shmem_provider)
+            .debug_child(true)
             // .parse_afl_cmdline(arguments)
             .coverage_map_size(map_size)
             .timeout(timeout)
@@ -150,7 +151,6 @@ where
             .is_persistent(true);
         let mut executor = fs_builder
             .build(tuple_list!(edges_observer, time_observer))
-            // .build_dynamic_map(edges_observer, tuple_list!(time_observer))
             .unwrap();
 
         // let dataflow = DataflowStage::new(fs_executor, dfsan_labels_map);
@@ -173,13 +173,13 @@ where
         EM: EventFirer<State = E::State> + EventRestarter,
         Z: UsesState<State = E::State> + HasObjective,
         E::State: HasCorpus + HasSolutions + HasExecutions,
-        E::Input: HasBytesVec,
+        E::Input: HasMutatorBytes,
     {
         // println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
         let mut label_num = 1;
         // println!("trying to get the map");
         // println!("{:?}", self.dfsan_labels_map);
-        let buf = self.dfsan_labels_map.as_mut_slice();
+        let buf = self.dfsan_labels_map.as_slice_mut();
         unsafe {
             buf[0] = labels.len() as u8;
             let mut pos = 1;
@@ -232,7 +232,7 @@ where
         EM: UsesState<State = E::State> + EventFirer + EventRestarter,
         E: HasObservers + Executor<EM, Z>,
         E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
-        E::Input: HasBytesVec,
+        E::Input: HasMutatorBytes,
         Z: UsesState<State = E::State> + HasObjective,
     {
         let input = {
@@ -302,7 +302,7 @@ impl<'a, EM, E, Z> UsesState for DataflowStage<'a, EM, E, Z>
 where
     E: UsesState + UsesInput,
     E::State: HasRand,
-    E::Input: HasBytesVec,
+    E::Input: HasMutatorBytes,
 {
     type State = E::State;
 }
@@ -312,11 +312,9 @@ where
     EM: UsesState<State = E::State> + EventFirer + EventRestarter,
     E: HasObservers + Executor<EM, Z>,
     E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
-    E::Input: HasBytesVec + HasTargetBytes,
+    E::Input: HasMutatorBytes + HasTargetBytes,
     Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
 {
-    type Progress = (); // TODO this stage needs resume
-
     #[inline]
     #[allow(clippy::let_and_return)]
     fn perform(
@@ -418,7 +416,7 @@ where
             let mut input = BytesInput::new(target_bytes.clone());
 
             start_timer!(state);
-            let mutated = mutator.mutate(state, &mut input, i)?;
+            let mutated = mutator.mutate(state, &mut input)?;
             mark_feature_time!(state, PerfFeature::Mutate);
 
             if mutated == MutationResult::Skipped {
@@ -444,11 +442,20 @@ where
             }
 
             start_timer!(state);
-            mutator.post_exec(state, i as i32, corpus_idx)?;
-            post.post_exec(state, i as i32, corpus_idx)?;
+            mutator.post_exec(state, corpus_idx)?;
+            post.post_exec(state, corpus_idx)?;
             mark_feature_time!(state, PerfFeature::MutatePostExec);
         }
 
         Ok(())
     }
+
+    fn restart_progress_should_run(&mut self, _: &mut <Self as UsesState>::State) -> Result<bool, libafl::Error> { 
+        Ok(true) 
+    }
+
+    fn clear_restart_progress(&mut self, _: &mut <Self as UsesState>::State) -> Result<(), libafl::Error> { 
+        Ok(()) 
+    }
+
 }

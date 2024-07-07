@@ -16,7 +16,7 @@ use alloc::string::ToString;
 pub use prometheus::PrometheusMonitor;
 #[cfg(feature = "std")]
 pub mod disk;
-use alloc::{fmt::Debug, string::String, vec::Vec};
+use alloc::{borrow::Cow, fmt::Debug, string::String, vec::Vec};
 use core::{fmt, fmt::Write, time::Duration};
 
 #[cfg(feature = "std")]
@@ -62,22 +62,20 @@ impl Aggregator {
 
     /// takes the key and the ref to clients stats then aggregate them all.
     fn aggregate(&mut self, name: &str, client_stats: &[ClientStats]) {
-        let mut gather = vec![];
+        let mut gather = client_stats
+            .iter()
+            .filter_map(|client| client.user_monitor.get(name));
 
-        for client in client_stats {
-            if let Some(x) = client.user_monitor.get(name) {
-                gather.push(x);
-            }
-        }
+        let gather_count = gather.clone().count();
 
-        let (mut init, op) = match gather.first() {
+        let (mut init, op) = match gather.next() {
             Some(x) => (x.value().clone(), x.aggregator_op().clone()),
             _ => {
                 return;
             }
         };
 
-        for item in gather.iter().skip(1) {
+        for item in gather {
             match op {
                 AggregatorOps::None => {
                     // Nothing
@@ -112,7 +110,7 @@ impl Aggregator {
 
         if let AggregatorOps::Avg = op {
             // if avg then divide last.
-            init = match init.stats_div(gather.len()) {
+            init = match init.stats_div(gather_count) {
                 Some(x) => x,
                 _ => {
                     return;
@@ -160,7 +158,7 @@ pub enum UserStatsValue {
     /// A Float value
     Float(f64),
     /// A `String`
-    String(String),
+    String(Cow<'static, str>),
     /// A ratio of two values
     Ratio(u64, u64),
     /// Percent
@@ -340,6 +338,8 @@ fn prettify_float(value: f64) -> String {
 /// A simple struct to keep track of client monitor
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClientStats {
+    /// If this client is enabled. This is set to `true` the first time we see this client.
+    pub enabled: bool,
     // monitor (maybe we need a separated struct?)
     /// The corpus size for this client
     pub corpus_size: u64,
@@ -364,7 +364,7 @@ pub struct ClientStats {
     /// the start time of the client
     pub start_time: Duration,
     /// User-defined monitor
-    pub user_monitor: HashMap<String, UserStats>,
+    pub user_monitor: HashMap<Cow<'static, str>, UserStats>,
     /// Client performance statistics
     #[cfg(feature = "introspection")]
     pub introspection_monitor: ClientPerfMonitor,
@@ -465,7 +465,11 @@ impl ClientStats {
     }
 
     /// Update the user-defined stat with name and value
-    pub fn update_user_stats(&mut self, name: String, value: UserStats) -> Option<UserStats> {
+    pub fn update_user_stats(
+        &mut self,
+        name: Cow<'static, str>,
+        value: UserStats,
+    ) -> Option<UserStats> {
         self.user_monitor.insert(name, value)
     }
 
@@ -506,6 +510,14 @@ pub trait Monitor {
             .fold(0_u64, |acc, x| acc + x.corpus_size)
     }
 
+    /// Count the number of enabled client stats
+    fn client_stats_count(&self) -> usize {
+        self.client_stats()
+            .iter()
+            .filter(|client| client.enabled)
+            .count()
+    }
+
     /// Amount of elements in the objectives (combined for all children)
     fn objective_size(&self) -> u64 {
         self.client_stats()
@@ -538,13 +550,22 @@ pub trait Monitor {
 
     /// The client monitor for a specific id, creating new if it doesn't exist
     fn client_stats_insert(&mut self, client_id: ClientId) {
-        let client_stat_count = self.client_stats().len();
-        for _ in client_stat_count..(client_id.0 + 1) as usize {
+        let total_client_stat_count = self.client_stats().len();
+        for _ in total_client_stat_count..=(client_id.0) as usize {
             self.client_stats_mut().push(ClientStats {
-                last_window_time: current_time(),
-                start_time: current_time(),
+                enabled: false,
+                last_window_time: Duration::from_secs(0),
+                start_time: Duration::from_secs(0),
                 ..ClientStats::default()
             });
+        }
+        let new_stat = self.client_stats_mut_for(client_id);
+        if !new_stat.enabled {
+            let timestamp = current_time();
+            // I have never seen this man in my life
+            new_stat.start_time = timestamp;
+            new_stat.last_window_time = timestamp;
+            new_stat.enabled = true;
         }
     }
 
@@ -673,7 +694,7 @@ impl Monitor for SimplePrintingMonitor {
             event_msg,
             sender_id.0,
             format_duration_hms(&(current_time() - self.start_time)),
-            self.client_stats().len(),
+            self.client_stats_count(),
             self.corpus_size(),
             self.objective_size(),
             self.total_execs(),
@@ -749,7 +770,7 @@ where
             event_msg,
             sender_id.0,
             format_duration_hms(&(current_time() - self.start_time)),
-            self.client_stats().len(),
+            self.client_stats_count(),
             self.corpus_size(),
             self.objective_size(),
             self.total_execs(),
@@ -807,11 +828,11 @@ where
     }
 
     /// Creates the monitor that also prints the user monitor
-    pub fn with_user_monitor(print_fn: F, print_user_monitor: bool) -> Self {
+    pub fn with_user_monitor(print_fn: F) -> Self {
         Self {
             print_fn,
             start_time: current_time(),
-            print_user_monitor,
+            print_user_monitor: true,
             client_stats: vec![],
         }
     }
@@ -1211,9 +1232,9 @@ impl ClientPerfMonitor {
 }
 
 #[cfg(feature = "introspection")]
-impl core::fmt::Display for ClientPerfMonitor {
+impl fmt::Display for ClientPerfMonitor {
     #[allow(clippy::cast_precision_loss)]
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> Result<(), core::fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         // Calculate the elapsed time from the monitor
         let elapsed: f64 = self.elapsed_cycles() as f64;
 
@@ -1287,177 +1308,5 @@ impl Default for ClientPerfMonitor {
     #[must_use]
     fn default() -> Self {
         Self::new()
-    }
-}
-/// `Monitor` Python bindings
-#[cfg(feature = "python")]
-#[allow(clippy::unnecessary_fallible_conversions)]
-#[allow(missing_docs)]
-pub mod pybind {
-    use alloc::{boxed::Box, vec::Vec};
-    use core::time::Duration;
-
-    use libafl_bolts::ClientId;
-    use pyo3::{prelude::*, types::PyUnicode};
-
-    use super::ClientStats;
-    use crate::monitors::{Monitor, SimpleMonitor};
-
-    /// A [`SimpleMonitor`] type with a boxed `FnMut` for printing
-    pub type SimpleBoxedFnMonitor = SimpleMonitor<Box<dyn FnMut(&str)>>;
-
-    // TODO create a PyObjectFnMut to pass, track stabilization of https://github.com/rust-lang/rust/issues/29625
-
-    #[pyclass(unsendable, name = "SimpleMonitor")]
-    /// Python class for SimpleMonitor
-    pub struct PythonSimpleMonitor {
-        /// Rust wrapped SimpleMonitor object
-        pub inner: SimpleBoxedFnMonitor,
-        print_fn: PyObject,
-    }
-
-    impl std::fmt::Debug for PythonSimpleMonitor {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("PythonSimpleMonitor")
-                .field("print_fn", &self.print_fn)
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl Clone for PythonSimpleMonitor {
-        fn clone(&self) -> PythonSimpleMonitor {
-            let py_print_fn = self.print_fn.clone();
-            let closure = move |s: &str| {
-                Python::with_gil(|py| -> PyResult<()> {
-                    py_print_fn.call1(py, (PyUnicode::new(py, s),))?;
-                    Ok(())
-                })
-                .unwrap();
-            };
-
-            PythonSimpleMonitor {
-                inner: SimpleMonitor {
-                    print_fn: Box::new(closure),
-                    start_time: self.inner.start_time,
-                    print_user_monitor: false,
-                    client_stats: self.inner.client_stats.clone(),
-                },
-                print_fn: self.print_fn.clone(),
-            }
-        }
-    }
-
-    #[pymethods]
-    impl PythonSimpleMonitor {
-        #[new]
-        fn new(py_print_fn: PyObject) -> Self {
-            let py_print_fn1 = py_print_fn.clone();
-            let closure = move |s: &str| {
-                Python::with_gil(|py| -> PyResult<()> {
-                    py_print_fn1.call1(py, (PyUnicode::new(py, s),))?;
-                    Ok(())
-                })
-                .unwrap();
-            };
-            Self {
-                inner: SimpleMonitor::new(Box::new(closure)),
-                print_fn: py_print_fn,
-            }
-        }
-
-        #[must_use]
-        pub fn as_monitor(slf: Py<Self>) -> PythonMonitor {
-            PythonMonitor::new_simple(slf)
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    enum PythonMonitorWrapper {
-        Simple(Py<PythonSimpleMonitor>),
-    }
-
-    #[pyclass(unsendable, name = "Monitor")]
-    #[derive(Clone, Debug)]
-    /// EventManager Trait binding
-    pub struct PythonMonitor {
-        wrapper: PythonMonitorWrapper,
-    }
-
-    macro_rules! unwrap_me {
-        ($wrapper:expr, $name:ident, $body:block) => {
-            libafl_bolts::unwrap_me_body!($wrapper, $name, $body, PythonMonitorWrapper, { Simple })
-        };
-    }
-
-    macro_rules! unwrap_me_mut {
-        ($wrapper:expr, $name:ident, $body:block) => {
-            libafl_bolts::unwrap_me_mut_body!($wrapper, $name, $body, PythonMonitorWrapper, {
-                Simple
-            })
-        };
-    }
-
-    #[pymethods]
-    impl PythonMonitor {
-        #[staticmethod]
-        #[must_use]
-        pub fn new_simple(simple_monitor: Py<PythonSimpleMonitor>) -> Self {
-            Self {
-                wrapper: PythonMonitorWrapper::Simple(simple_monitor),
-            }
-        }
-    }
-
-    impl Monitor for PythonMonitor {
-        fn client_stats_mut(&mut self) -> &mut Vec<ClientStats> {
-            let ptr = unwrap_me_mut!(self.wrapper, m, {
-                core::ptr::from_mut(m.client_stats_mut())
-            });
-            unsafe { ptr.as_mut().unwrap() }
-        }
-
-        fn client_stats(&self) -> &[ClientStats] {
-            let ptr = unwrap_me!(self.wrapper, m, { core::ptr::from_ref(m.client_stats()) });
-            unsafe { ptr.as_ref().unwrap() }
-        }
-
-        /// Time this fuzzing run stated
-        fn start_time(&self) -> Duration {
-            unwrap_me!(self.wrapper, m, { m.start_time() })
-        }
-
-        /// set start time
-        fn set_start_time(&mut self, time: Duration) {
-            unwrap_me_mut!(self.wrapper, m, { m.set_start_time(time) });
-        }
-
-        fn display(&mut self, event_msg: &str, sender_id: ClientId) {
-            unwrap_me_mut!(self.wrapper, m, { m.display(event_msg, sender_id) });
-        }
-    }
-    /// Register the classes to the python module
-    pub fn register(_py: Python, m: &PyModule) -> PyResult<()> {
-        m.add_class::<PythonSimpleMonitor>()?;
-        m.add_class::<PythonMonitor>()?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::monitors::prettify_float;
-    #[test]
-    fn test_prettify_float() {
-        assert_eq!(prettify_float(123423123.0), "123.4M");
-        assert_eq!(prettify_float(12342312.3), "12.34M");
-        assert_eq!(prettify_float(1234231.23), "1.234M");
-        assert_eq!(prettify_float(123423.123), "123.4k");
-        assert_eq!(prettify_float(12342.3123), "12.34k");
-        assert_eq!(prettify_float(1234.23123), "1.234k");
-        assert_eq!(prettify_float(123.423123), "123.4");
-        assert_eq!(prettify_float(12.3423123), "12.34");
-        assert_eq!(prettify_float(1.23423123), "1.234");
-        assert_eq!(prettify_float(0.123423123), "0.123");
-        assert_eq!(prettify_float(0.0123423123), "0.012");
     }
 }

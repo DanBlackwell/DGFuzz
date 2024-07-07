@@ -1,15 +1,18 @@
 //! A wide variety of mutations used during fuzzing.
 
-use alloc::{borrow::ToOwned, vec::Vec};
+use alloc::{
+    borrow::{Cow, ToOwned},
+    vec::Vec,
+};
 use core::{cmp::min, marker::PhantomData, mem::size_of, ops::Range};
 
 use libafl_bolts::{rands::Rand, Named};
 
 use crate::{
     corpus::Corpus,
-    inputs::{HasBytesVec, Input},
+    inputs::HasMutatorBytes,
     mutators::{MutationResult, Mutator},
-    random_corpus_id,
+    random_corpus_id_with_disabled,
     state::{HasCorpus, HasMaxSize, HasRand},
     Error,
 };
@@ -62,9 +65,9 @@ pub fn buffer_set<T: Clone>(data: &mut [T], from: usize, len: usize, val: T) {
 /// This problem corresponds to: <https://oeis.org/A059036>
 #[inline]
 pub fn rand_range<S: HasRand>(state: &mut S, upper: usize, max_len: usize) -> Range<usize> {
-    let len = 1 + state.rand_mut().below(max_len as u64) as usize;
+    let len = 1 + state.rand_mut().below(max_len);
     // sample from [1..upper + len]
-    let mut offset2 = 1 + state.rand_mut().below((upper + len - 1) as u64) as usize;
+    let mut offset2 = 1 + state.rand_mut().below(upper + len - 1);
     let offset1 = offset2.saturating_sub(len);
     if offset2 > upper {
         offset2 = upper;
@@ -74,7 +77,7 @@ pub fn rand_range<S: HasRand>(state: &mut S, upper: usize, max_len: usize) -> Ra
 }
 
 /// The max value that will be added or subtracted during add mutations
-pub const ARITH_MAX: u64 = 35;
+pub const ARITH_MAX: usize = 35;
 
 /// Interesting 8-bit values from AFL
 pub const INTERESTING_8: [i8; 9] = [-128, -1, 0, 1, 16, 32, 64, 100, 127];
@@ -120,14 +123,9 @@ pub struct BitFlipMutator;
 impl<I, S> Mutator<I, S> for BitFlipMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.bytes().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
@@ -140,8 +138,9 @@ where
 }
 
 impl Named for BitFlipMutator {
-    fn name(&self) -> &str {
-        "BitFlipMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BitFlipMutator");
+        &NAME
     }
 }
 
@@ -160,14 +159,9 @@ pub struct ByteFlipMutator;
 impl<I, S> Mutator<I, S> for ByteFlipMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.bytes().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
@@ -178,8 +172,9 @@ where
 }
 
 impl Named for ByteFlipMutator {
-    fn name(&self) -> &str {
-        "ByteFlipMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ByteFlipMutator");
+        &NAME
     }
 }
 
@@ -198,14 +193,9 @@ pub struct ByteIncMutator;
 impl<I, S> Mutator<I, S> for ByteIncMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.bytes().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
@@ -217,8 +207,9 @@ where
 }
 
 impl Named for ByteIncMutator {
-    fn name(&self) -> &str {
-        "ByteIncMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ByteIncMutator");
+        &NAME
     }
 }
 
@@ -237,14 +228,9 @@ pub struct ByteDecMutator;
 impl<I, S> Mutator<I, S> for ByteDecMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.bytes().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
@@ -256,8 +242,9 @@ where
 }
 
 impl Named for ByteDecMutator {
-    fn name(&self) -> &str {
-        "ByteDecMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ByteDecMutator");
+        &NAME
     }
 }
 
@@ -276,14 +263,9 @@ pub struct ByteNegMutator;
 impl<I, S> Mutator<I, S> for ByteNegMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.bytes().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
@@ -295,8 +277,9 @@ where
 }
 
 impl Named for ByteNegMutator {
-    fn name(&self) -> &str {
-        "ByteNegMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ByteNegMutator");
+        &NAME
     }
 }
 
@@ -315,14 +298,9 @@ pub struct ByteRandMutator;
 impl<I, S> Mutator<I, S> for ByteRandMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         if input.bytes().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
@@ -334,8 +312,9 @@ where
 }
 
 impl Named for ByteRandMutator {
-    fn name(&self) -> &str {
-        "ByteRandMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ByteRandMutator");
+        &NAME
     }
 }
 
@@ -359,13 +338,13 @@ macro_rules! add_mutator_impl {
         impl<I, S> Mutator<I, S> for $name
         where
             S: HasRand,
-            I: HasBytesVec,
+            I: HasMutatorBytes,
         {
             fn mutate(
                 &mut self,
                 state: &mut S,
                 input: &mut I,
-                _stage_idx: i32,
+
             ) -> Result<MutationResult, Error> {
                 if input.bytes().len() < size_of::<$size>() {
                     Ok(MutationResult::Skipped)
@@ -394,8 +373,9 @@ macro_rules! add_mutator_impl {
         }
 
         impl Named for $name {
-            fn name(&self) -> &str {
-                stringify!($name)
+            fn name(&self) -> &Cow<'static, str> {
+                static NAME: Cow<'static, str> = Cow::Borrowed(stringify!($name));
+                &NAME
             }
         }
 
@@ -425,21 +405,16 @@ macro_rules! interesting_mutator_impl {
         impl<I, S> Mutator<I, S> for $name
         where
             S: HasRand,
-            I: HasBytesVec,
+            I: HasMutatorBytes,
         {
             #[allow(clippy::cast_sign_loss)]
-            fn mutate(
-                &mut self,
-                state: &mut S,
-                input: &mut I,
-                _stage_idx: i32,
-            ) -> Result<MutationResult, Error> {
+            fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
                 if input.bytes().len() < size_of::<$size>() {
                     Ok(MutationResult::Skipped)
                 } else {
                     let bytes = input.bytes_mut();
-                    let upper_bound = (bytes.len() + 1 - size_of::<$size>()) as u64;
-                    let idx = state.rand_mut().below(upper_bound) as usize;
+                    let upper_bound = (bytes.len() + 1 - size_of::<$size>());
+                    let idx = state.rand_mut().below(upper_bound);
                     let val = *state.rand_mut().choose(&$interesting) as $size;
                     let new_bytes = match state.rand_mut().choose(&[0, 1]) {
                         0 => val.to_be_bytes(),
@@ -452,8 +427,9 @@ macro_rules! interesting_mutator_impl {
         }
 
         impl Named for $name {
-            fn name(&self) -> &str {
-                stringify!($name)
+            fn name(&self) -> &Cow<'static, str> {
+                static NAME: Cow<'static, str> = Cow::Borrowed(stringify!($name));
+                &NAME
             }
         }
 
@@ -478,14 +454,9 @@ pub struct BytesDeleteMutator;
 impl<I, S> Mutator<I, S> for BytesDeleteMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size <= 2 {
             return Ok(MutationResult::Skipped);
@@ -493,15 +464,16 @@ where
 
         let range = rand_range(state, size, size - 1);
 
-        input.bytes_mut().drain(range);
+        input.drain(range);
 
         Ok(MutationResult::Mutated)
     }
 }
 
 impl Named for BytesDeleteMutator {
-    fn name(&self) -> &str {
-        "BytesDeleteMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesDeleteMutator");
+        &NAME
     }
 }
 
@@ -520,14 +492,9 @@ pub struct BytesExpandMutator;
 impl<I, S> Mutator<I, S> for BytesExpandMutator
 where
     S: HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let max_size = state.max_size();
         let size = input.bytes().len();
         if size == 0 || size >= max_size {
@@ -536,7 +503,7 @@ where
 
         let range = rand_range(state, size, min(16, max_size - size));
 
-        input.bytes_mut().resize(size + range.len(), 0);
+        input.resize(size + range.len(), 0);
         unsafe {
             buffer_self_copy(
                 input.bytes_mut(),
@@ -551,8 +518,9 @@ where
 }
 
 impl Named for BytesExpandMutator {
-    fn name(&self) -> &str {
-        "BytesExpandMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesExpandMutator");
+        &NAME
     }
 }
 
@@ -571,22 +539,17 @@ pub struct BytesInsertMutator;
 impl<I, S> Mutator<I, S> for BytesInsertMutator
 where
     S: HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let max_size = state.max_size();
         let size = input.bytes().len();
         if size == 0 || size >= max_size {
             return Ok(MutationResult::Skipped);
         }
 
-        let mut amount = 1 + state.rand_mut().below(16) as usize;
-        let offset = state.rand_mut().below(size as u64 + 1) as usize;
+        let mut amount = 1 + state.rand_mut().below(16);
+        let offset = state.rand_mut().below(size + 1);
 
         if size + amount > max_size {
             if max_size > size {
@@ -596,9 +559,9 @@ where
             }
         }
 
-        let val = input.bytes()[state.rand_mut().below(size as u64) as usize];
+        let val = input.bytes()[state.rand_mut().below(size)];
 
-        input.bytes_mut().resize(size + amount, 0);
+        input.resize(size + amount, 0);
         unsafe {
             buffer_self_copy(input.bytes_mut(), offset, offset + amount, size - offset);
         }
@@ -609,8 +572,9 @@ where
 }
 
 impl Named for BytesInsertMutator {
-    fn name(&self) -> &str {
-        "BytesInsertMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesInsertMutator");
+        &NAME
     }
 }
 
@@ -629,22 +593,17 @@ pub struct BytesRandInsertMutator;
 impl<I, S> Mutator<I, S> for BytesRandInsertMutator
 where
     S: HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let max_size = state.max_size();
         let size = input.bytes().len();
         if size >= max_size {
             return Ok(MutationResult::Skipped);
         }
 
-        let mut amount = 1 + state.rand_mut().below(16) as usize;
-        let offset = state.rand_mut().below(size as u64 + 1) as usize;
+        let mut amount = 1 + state.rand_mut().below(16);
+        let offset = state.rand_mut().below(size + 1);
 
         if size + amount > max_size {
             if max_size > size {
@@ -656,7 +615,7 @@ where
 
         let val = state.rand_mut().next() as u8;
 
-        input.bytes_mut().resize(size + amount, 0);
+        input.resize(size + amount, 0);
         unsafe {
             buffer_self_copy(input.bytes_mut(), offset, offset + amount, size - offset);
         }
@@ -667,8 +626,9 @@ where
 }
 
 impl Named for BytesRandInsertMutator {
-    fn name(&self) -> &str {
-        "BytesRandInsertMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesRandInsertMutator");
+        &NAME
     }
 }
 
@@ -687,14 +647,9 @@ pub struct BytesSetMutator;
 impl<I, S> Mutator<I, S> for BytesSetMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size == 0 {
             return Ok(MutationResult::Skipped);
@@ -710,8 +665,9 @@ where
 }
 
 impl Named for BytesSetMutator {
-    fn name(&self) -> &str {
-        "BytesSetMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesSetMutator");
+        &NAME
     }
 }
 
@@ -730,14 +686,9 @@ pub struct BytesRandSetMutator;
 impl<I, S> Mutator<I, S> for BytesRandSetMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size == 0 {
             return Ok(MutationResult::Skipped);
@@ -753,8 +704,9 @@ where
 }
 
 impl Named for BytesRandSetMutator {
-    fn name(&self) -> &str {
-        "BytesRandSetMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesRandSetMutator");
+        &NAME
     }
 }
 
@@ -773,20 +725,15 @@ pub struct BytesCopyMutator;
 impl<I, S> Mutator<I, S> for BytesCopyMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size <= 1 {
             return Ok(MutationResult::Skipped);
         }
 
-        let target = state.rand_mut().below(size as u64) as usize;
+        let target = state.rand_mut().below(size);
         let range = rand_range(state, size, size - target);
 
         unsafe {
@@ -798,8 +745,9 @@ where
 }
 
 impl Named for BytesCopyMutator {
-    fn name(&self) -> &str {
-        "BytesCopyMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesCopyMutator");
+        &NAME
     }
 }
 
@@ -820,25 +768,20 @@ pub struct BytesInsertCopyMutator {
 impl<I, S> Mutator<I, S> for BytesInsertCopyMutator
 where
     S: HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size <= 1 || size >= state.max_size() {
             return Ok(MutationResult::Skipped);
         }
 
-        let target = state.rand_mut().below(size as u64) as usize;
+        let target = state.rand_mut().below(size);
         // make sure that the sampled range is both in bounds and of an acceptable size
         let max_insert_len = min(size - target, state.max_size() - size);
         let range = rand_range(state, size, min(16, max_insert_len));
 
-        input.bytes_mut().resize(size + range.len(), 0);
+        input.resize(size + range.len(), 0);
         self.tmp_buf.resize(range.len(), 0);
         unsafe {
             buffer_copy(
@@ -862,8 +805,9 @@ where
 }
 
 impl Named for BytesInsertCopyMutator {
-    fn name(&self) -> &str {
-        "BytesInsertCopyMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesInsertCopyMutator");
+        &NAME
     }
 }
 
@@ -885,14 +829,9 @@ pub struct BytesSwapMutator {
 impl<I, S> Mutator<I, S> for BytesSwapMutator
 where
     S: HasRand,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut I,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size <= 1 {
             return Ok(MutationResult::Skipped);
@@ -1070,8 +1009,9 @@ where
 }
 
 impl Named for BytesSwapMutator {
-    fn name(&self) -> &str {
-        "BytesSwapMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("BytesSwapMutator");
+        &NAME
     }
 }
 
@@ -1089,15 +1029,15 @@ pub struct CrossoverInsertMutator<I> {
     phantom: PhantomData<I>,
 }
 
-impl<I: HasBytesVec> CrossoverInsertMutator<I> {
-    pub(crate) fn crossover_insert(
+impl<I: HasMutatorBytes> CrossoverInsertMutator<I> {
+    pub(crate) fn crossover_insert<I2: HasMutatorBytes>(
         input: &mut I,
         size: usize,
         target: usize,
         range: Range<usize>,
-        other: &I,
+        other: &I2,
     ) -> MutationResult {
-        input.bytes_mut().resize(size + range.len(), 0);
+        input.resize(size + range.len(), 0);
         unsafe {
             buffer_self_copy(
                 input.bytes_mut(),
@@ -1122,15 +1062,11 @@ impl<I: HasBytesVec> CrossoverInsertMutator<I> {
 
 impl<I, S> Mutator<I, S> for CrossoverInsertMutator<I>
 where
-    S: HasCorpus<Input = I> + HasRand + HasMaxSize,
-    I: Input + HasBytesVec,
+    S: HasCorpus + HasRand + HasMaxSize,
+    S::Input: HasMutatorBytes,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut S::Input,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         let max_size = state.max_size();
         if size >= max_size {
@@ -1138,7 +1074,7 @@ where
         }
 
         // We don't want to use the testcase we're already using for splicing
-        let idx = random_corpus_id!(state.corpus(), state.rand_mut());
+        let idx = random_corpus_id_with_disabled!(state.corpus(), state.rand_mut());
 
         if let Some(cur) = state.corpus().current() {
             if idx == *cur {
@@ -1147,7 +1083,7 @@ where
         }
 
         let other_size = {
-            let mut other_testcase = state.corpus().get(idx)?.borrow_mut();
+            let mut other_testcase = state.corpus().get_from_all(idx)?.borrow_mut();
             other_testcase.load_input(state.corpus())?.bytes().len()
         };
 
@@ -1156,9 +1092,9 @@ where
         }
 
         let range = rand_range(state, other_size, min(other_size, max_size - size));
-        let target = state.rand_mut().below(size as u64) as usize;
+        let target = state.rand_mut().below(size);
 
-        let other_testcase = state.corpus().get(idx)?.borrow_mut();
+        let other_testcase = state.corpus().get_from_all(idx)?.borrow_mut();
         // No need to load the input again, it'll still be cached.
         let other = other_testcase.input().as_ref().unwrap();
 
@@ -1167,8 +1103,9 @@ where
 }
 
 impl<I> Named for CrossoverInsertMutator<I> {
-    fn name(&self) -> &str {
-        "CrossoverInsertMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("CrossoverInsertMutator");
+        &NAME
     }
 }
 
@@ -1188,12 +1125,12 @@ pub struct CrossoverReplaceMutator<I> {
     phantom: PhantomData<I>,
 }
 
-impl<I: HasBytesVec> CrossoverReplaceMutator<I> {
-    pub(crate) fn crossover_replace(
+impl<I: HasMutatorBytes> CrossoverReplaceMutator<I> {
+    pub(crate) fn crossover_replace<I2: HasMutatorBytes>(
         input: &mut I,
         target: usize,
         range: Range<usize>,
-        other: &I,
+        other: &I2,
     ) -> MutationResult {
         unsafe {
             buffer_copy(
@@ -1210,22 +1147,18 @@ impl<I: HasBytesVec> CrossoverReplaceMutator<I> {
 
 impl<I, S> Mutator<I, S> for CrossoverReplaceMutator<I>
 where
-    S: HasCorpus<Input = I> + HasRand,
-    I: Input + HasBytesVec,
+    S: HasCorpus + HasRand,
+    S::Input: HasMutatorBytes,
+    I: HasMutatorBytes,
 {
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut S::Input,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
         if size == 0 {
             return Ok(MutationResult::Skipped);
         }
 
         // We don't want to use the testcase we're already using for splicing
-        let idx = random_corpus_id!(state.corpus(), state.rand_mut());
+        let idx = random_corpus_id_with_disabled!(state.corpus(), state.rand_mut());
         if let Some(cur) = state.corpus().current() {
             if idx == *cur {
                 return Ok(MutationResult::Skipped);
@@ -1233,7 +1166,7 @@ where
         }
 
         let other_size = {
-            let mut testcase = state.corpus().get(idx)?.borrow_mut();
+            let mut testcase = state.corpus().get_from_all(idx)?.borrow_mut();
             testcase.load_input(state.corpus())?.bytes().len()
         };
 
@@ -1241,10 +1174,10 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        let target = state.rand_mut().below(size as u64) as usize;
+        let target = state.rand_mut().below(size);
         let range = rand_range(state, other_size, min(other_size, size - target));
 
-        let other_testcase = state.corpus().get(idx)?.borrow_mut();
+        let other_testcase = state.corpus().get_from_all(idx)?.borrow_mut();
         // No need to load the input again, it'll still be cached.
         let other = other_testcase.input().as_ref().unwrap();
 
@@ -1253,8 +1186,9 @@ where
 }
 
 impl<I> Named for CrossoverReplaceMutator<I> {
-    fn name(&self) -> &str {
-        "CrossoverReplaceMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("CrossoverReplaceMutator");
+        &NAME
     }
 }
 
@@ -1292,17 +1226,12 @@ pub struct SpliceMutator;
 impl<S> Mutator<S::Input, S> for SpliceMutator
 where
     S: HasCorpus + HasRand,
-    S::Input: HasBytesVec,
+    S::Input: HasMutatorBytes,
 {
     #[allow(clippy::cast_sign_loss)]
-    fn mutate(
-        &mut self,
-        state: &mut S,
-        input: &mut S::Input,
-        _stage_idx: i32,
-    ) -> Result<MutationResult, Error> {
+    fn mutate(&mut self, state: &mut S, input: &mut S::Input) -> Result<MutationResult, Error> {
         // We don't want to use the testcase we're already using for splicing
-        let idx = random_corpus_id!(state.corpus(), state.rand_mut());
+        let idx = random_corpus_id_with_disabled!(state.corpus(), state.rand_mut());
         if let Some(cur) = state.corpus().current() {
             if idx == *cur {
                 return Ok(MutationResult::Skipped);
@@ -1310,35 +1239,34 @@ where
         }
 
         let (first_diff, last_diff) = {
-            let mut other_testcase = state.corpus().get(idx)?.borrow_mut();
+            let mut other_testcase = state.corpus().get_from_all(idx)?.borrow_mut();
             let other = other_testcase.load_input(state.corpus())?;
 
             let (f, l) = locate_diffs(input.bytes(), other.bytes());
 
             if f != l && f >= 0 && l >= 2 {
-                (f as u64, l as u64)
+                (f as usize, l as usize)
             } else {
                 return Ok(MutationResult::Skipped);
             }
         };
 
-        let split_at = state.rand_mut().between(first_diff, last_diff) as usize;
+        let split_at = state.rand_mut().between(first_diff, last_diff);
 
-        let other_testcase = state.corpus().get(idx)?.borrow_mut();
+        let other_testcase = state.corpus().get_from_all(idx)?.borrow_mut();
         // Input will already be loaded.
         let other = other_testcase.input().as_ref().unwrap();
 
-        input
-            .bytes_mut()
-            .splice(split_at.., other.bytes()[split_at..].iter().copied());
+        input.splice(split_at.., other.bytes()[split_at..].iter().copied());
 
         Ok(MutationResult::Mutated)
     }
 }
 
 impl Named for SpliceMutator {
-    fn name(&self) -> &str {
-        "SpliceMutator"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("SpliceMutator");
+        &NAME
     }
 }
 
@@ -1401,11 +1329,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        corpus::InMemoryCorpus,
-        feedbacks::ConstFeedback,
-        inputs::BytesInput,
-        mutators::MutatorsTuple,
-        state::{HasMetadata, StdState},
+        corpus::InMemoryCorpus, feedbacks::ConstFeedback, inputs::BytesInput,
+        mutators::MutatorsTuple, state::StdState, HasMetadata,
     };
 
     type TestMutatorsTupleType = tuple_list_type!(
@@ -1508,7 +1433,7 @@ mod tests {
                 for input in &inputs {
                     let mut mutant = input.clone();
                     match mutations
-                        .get_and_mutate(idx.into(), &mut state, &mut mutant, 0)
+                        .get_and_mutate(idx.into(), &mut state, &mut mutant)
                         .unwrap()
                     {
                         MutationResult::Mutated => new_testcases.push(mutant),
@@ -1534,7 +1459,7 @@ mod tests {
 
         for _ in 0..iters {
             let mut mutated = base.clone();
-            if mutator.mutate(&mut state, &mut mutated, 0)? == MutationResult::Skipped {
+            if mutator.mutate(&mut state, &mut mutated)? == MutationResult::Skipped {
                 continue;
             }
             let mut gaps = 0;
@@ -1588,7 +1513,7 @@ mod tests {
 
         for _ in 0..iters {
             let mut mutated = base.clone();
-            if mutator.mutate(&mut state, &mut mutated, 0)? == MutationResult::Skipped {
+            if mutator.mutate(&mut state, &mut mutated)? == MutationResult::Skipped {
                 continue;
             }
             let mut expansion = 0;
@@ -1637,7 +1562,7 @@ mod tests {
 
         for _ in 0..iters {
             let mut mutated = base.clone();
-            if mutator.mutate(&mut state, &mut mutated, 0)? == MutationResult::Skipped {
+            if mutator.mutate(&mut state, &mut mutated)? == MutationResult::Skipped {
                 continue;
             }
             let mut inserted = 0;
@@ -1687,7 +1612,7 @@ mod tests {
 
         for _ in 0..iters {
             let mut mutated = base.clone();
-            if mutator.mutate(&mut state, &mut mutated, 0)? == MutationResult::Skipped {
+            if mutator.mutate(&mut state, &mut mutated)? == MutationResult::Skipped {
                 continue;
             }
             let mut inserted = 10;

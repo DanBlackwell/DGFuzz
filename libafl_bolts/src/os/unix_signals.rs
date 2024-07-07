@@ -20,6 +20,9 @@ pub use libc::c_ulong;
 #[cfg(feature = "std")]
 use nix::errno::{errno, Errno};
 
+/// The special exit code when the target exited through ctrl-c
+pub const CTRL_C_EXIT: i32 = 100;
+
 /// ARMv7-specific representation of a saved context
 #[cfg(target_arch = "arm")]
 #[derive(Debug)]
@@ -174,11 +177,11 @@ pub struct arm_neon_state64 {
 #[repr(C)]
 #[allow(clippy::pub_underscore_fields)]
 pub struct mcontext64 {
-    /// _STRUCT_ARM_EXCEPTION_STATE64
+    /// `_STRUCT_ARM_EXCEPTION_STATE64`
     pub __es: arm_exception_state64,
-    /// _STRUCT_ARM_THREAD_STATE64
+    /// `_STRUCT_ARM_THREAD_STATE64`
     pub __ss: arm_thread_state64,
-    /// _STRUCT_ARM_NEON_STATE64
+    /// `_STRUCT_ARM_NEON_STATE64`
     pub __ns: arm_neon_state64,
 }
 
@@ -189,7 +192,7 @@ pub struct mcontext64 {
 /// __darwin_size_t ss_size;        /* signal stack length */
 /// int             ss_flags;       /* SA_DISABLE and/or SA_ONSTACK */
 /// };
-/// ````
+/// ```
 #[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
 #[derive(Debug)]
 #[allow(non_camel_case_types)]
@@ -199,7 +202,7 @@ pub struct sigaltstack {
     pub ss_sp: *mut c_void,
     /// signal stack length
     pub ss_size: libc::size_t,
-    /// SA_DISABLE and/or SA_ONSTACK
+    /// `SA_DISABLE` and/or `SA_ONSTACK`
     pub ss_flags: c_int,
 }
 
@@ -263,7 +266,7 @@ use crate::Error;
 
 extern "C" {
     /// The `libc` `getcontext`
-    /// For some reason, it's not available on MacOS.
+    /// For some reason, it's not available on `MacOS`.
     ///
     fn getcontext(ucp: *mut ucontext_t) -> c_int;
 }
@@ -300,6 +303,19 @@ pub enum Signal {
     SigInterrupt = SIGINT,
     /// `SIGTRAP` signal id
     SigTrap = SIGTRAP,
+}
+
+#[cfg(feature = "std")]
+impl Signal {
+    /// Handle an incoming signal
+    pub fn handle(&self) {
+        match self {
+            Signal::SigInterrupt | Signal::SigQuit | Signal::SigTerm => {
+                std::process::exit(CTRL_C_EXIT)
+            }
+            _ => {}
+        }
+    }
 }
 
 impl TryFrom<&str> for Signal {

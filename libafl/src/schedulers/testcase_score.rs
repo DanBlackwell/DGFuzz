@@ -6,13 +6,13 @@ use libafl_bolts::{HasLen, HasRefCnt};
 
 use crate::{
     corpus::{Corpus, SchedulerTestcaseMetadata, Testcase},
-    feedbacks::{MapIndexesMetadata, map::MapUncoveredNeighboursMetadata},
+    feedbacks::MapIndexesMetadata,
     schedulers::{
         minimizer::{IsFavoredMetadata, TopRatedsMetadata},
         powersched::{PowerSchedule, SchedulerMetadata},
     },
-    state::{HasCorpus, HasMetadata},
-    Error,
+    state::HasCorpus,
+    Error, HasMetadata,
 };
 
 /// Compute the favor factor of a [`Testcase`]. Higher is better.
@@ -137,6 +137,21 @@ where
             perf_score = 150.0;
         }
 
+        let q_bitmap_size = tcmeta.bitmap_size() as f64;
+        if q_bitmap_size * 0.3 > avg_bitmap_size as f64 {
+            perf_score *= 3.0;
+        } else if q_bitmap_size * 0.5 > avg_bitmap_size as f64 {
+            perf_score *= 2.0;
+        } else if q_bitmap_size * 0.75 > avg_bitmap_size as f64 {
+            perf_score *= 1.5;
+        } else if q_bitmap_size * 3.0 < avg_bitmap_size as f64 {
+            perf_score *= 0.25;
+        } else if q_bitmap_size * 2.0 < avg_bitmap_size as f64 {
+            perf_score *= 0.5;
+        } else if q_bitmap_size * 1.5 < avg_bitmap_size as f64 {
+            perf_score *= 0.75;
+        }
+
         if tcmeta.handicap() >= 4 {
             perf_score *= 4.0;
             // tcmeta.set_handicap(tcmeta.handicap() - 4);
@@ -145,31 +160,14 @@ where
             // tcmeta.set_handicap(tcmeta.handicap() - 1);
         }
 
-        if !entry.has_metadata::<MapUncoveredNeighboursMetadata>() {
-            let q_bitmap_size = tcmeta.bitmap_size() as f64;
-            if q_bitmap_size * 0.3 > avg_bitmap_size as f64 {
-                perf_score *= 3.0;
-            } else if q_bitmap_size * 0.5 > avg_bitmap_size as f64 {
-                perf_score *= 2.0;
-            } else if q_bitmap_size * 0.75 > avg_bitmap_size as f64 {
-                perf_score *= 1.5;
-            } else if q_bitmap_size * 3.0 < avg_bitmap_size as f64 {
-                perf_score *= 0.25;
-            } else if q_bitmap_size * 2.0 < avg_bitmap_size as f64 {
-                perf_score *= 0.5;
-            } else if q_bitmap_size * 1.5 < avg_bitmap_size as f64 {
-                perf_score *= 0.75;
-            }
-
-            if tcmeta.depth() >= 4 && tcmeta.depth() < 8 {
-                perf_score *= 2.0;
-            } else if tcmeta.depth() >= 8 && tcmeta.depth() < 14 {
-                perf_score *= 3.0;
-            } else if tcmeta.depth() >= 14 && tcmeta.depth() < 25 {
-                perf_score *= 4.0;
-            } else if tcmeta.depth() >= 25 {
-                perf_score *= 5.0;
-            }
+        if tcmeta.depth() >= 4 && tcmeta.depth() < 8 {
+            perf_score *= 2.0;
+        } else if tcmeta.depth() >= 8 && tcmeta.depth() < 14 {
+            perf_score *= 3.0;
+        } else if tcmeta.depth() >= 14 && tcmeta.depth() < 25 {
+            perf_score *= 4.0;
+        } else if tcmeta.depth() >= 25 {
+            perf_score *= 5.0;
         }
 
         let mut factor: f64 = 1.0;
@@ -305,19 +303,13 @@ where
 
         let q_bitmap_size = tcmeta.bitmap_size() as f64;
 
-        if let Some(strat) = psmeta.strat() {
-            match strat {
-                PowerSchedule::FAST
-                | PowerSchedule::COE
-                | PowerSchedule::LIN
-                | PowerSchedule::QUAD => {
-                    let hits = psmeta.n_fuzz()[tcmeta.n_fuzz_entry()];
-                    if hits > 0 {
-                        weight /= libm::log10(f64::from(hits)) + 1.0;
-                    }
-                }
-                // EXPLORE and EXPLOIT fall into this
-                _ => {}
+        if let Some(
+            PowerSchedule::FAST | PowerSchedule::COE | PowerSchedule::LIN | PowerSchedule::QUAD,
+        ) = psmeta.strat()
+        {
+            let hits = psmeta.n_fuzz()[tcmeta.n_fuzz_entry()];
+            if hits > 0 {
+                weight /= libm::log10(f64::from(hits)) + 1.0;
             }
         }
 

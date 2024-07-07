@@ -32,9 +32,6 @@ introspection = []
 ## Collects stats about scalability
 scalability_introspection = []
 
-## Will build the `pyo3` bindings
-python = ["pyo3", "concat-idents", "libafl_bolts/python"]
-
 ## Expose `libafl::prelude` for access without additional using directives
 prelude = ["libafl_bolts/prelude"]
 
@@ -48,7 +45,7 @@ errors_backtrace = ["libafl_bolts/errors_backtrace"]
 corpus_btreemap = []
 
 ## Enables gzip compression in certain parts of the lib
-gzip = ["libafl_bolts/gzip"] 
+gzip = ["libafl_bolts/gzip"]
 
 ## If set, will use the `fork()` syscall to spawn children, instead of launching a new command, if supported by the OS (has no effect on `Windows`).
 fork = ["libafl_bolts/derive"]
@@ -63,6 +60,9 @@ handle_sigpipe = []
 
 ## Enables `TcpEventManager`, a simple EventManager proxying everything via TCP. This uses `tokio`.
 tcp_manager = ["tokio", "std"]
+
+## Enables compression for the TCP manager
+tcp_compression = ["tcp_manager", "libafl_bolts/gzip"]
 
 ## Enables the `NaiveTokenizer` and `StacktraceObserver`
 regex = ["std", "dep:regex"]
@@ -83,7 +83,7 @@ concolic_mutation = ["z3"]
 tui_monitor = ["ratatui", "crossterm"]
 
 ## Enables `StringClassificationStage` and associated mutators, which allow for mutations which preserve the Unicode property data
-unicode = ["libafl_bolts/alloc", "ahash/std", "serde/rc", "bitvec", "reqwest", "zip"]
+unicode = ["libafl_bolts/alloc", "ahash/std", "serde/rc", "bitvec"]
 
 ## Enable multi-part input formats and mutators
 multipart_inputs = ["arrayvec", "rand_trait"]
@@ -122,7 +122,7 @@ llmp_bind_public = ["libafl_bolts/llmp_bind_public"]
 llmp_compression = ["libafl_bolts/llmp_compression"]
 
 ## Enables debug output for LLMP (also needs a `logger` installed)
-llmp_debug = ["libafl_bolts/llmp_debug"]
+llmp_debug = ["std", "libafl_bolts/llmp_debug"]
 
 ## Reduces the initial map size for llmp
 llmp_small_maps = ["libafl_bolts/llmp_small_maps"] # reduces initial map size for llmp
@@ -136,9 +136,7 @@ agpl = ["nautilus"]
 nautilus = ["grammartec", "std", "serde_json/std"]
 
 [build-dependencies]
-reqwest = { version = "0.11", features = ["blocking"], optional = true}
 rustversion = "1.0"
-zip = { version = "0.6", optional = true }
 
 [dev-dependencies]
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
@@ -146,21 +144,21 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 bytecount = "0.6.3"
 
 [dependencies]
-libafl_bolts = { version = "0.11.2", path = "../libafl_bolts", default-features = false, features = ["alloc"] }
-libafl_derive = { version = "0.11.2", path = "../libafl_derive", optional = true }
+libafl_bolts = { version = "0.12.0", path = "../libafl_bolts", default-features = false, features = ["alloc"] }
+libafl_derive = { version = "0.12.0", path = "../libafl_derive", optional = true }
 
 rustversion = "1.0"
 tuple_list = { version = "0.1.3" }
-hashbrown =  { version = "0.14", features = ["serde", "ahash"], default-features=false } # A faster hashmap, nostd compatible
+hashbrown = { version = "0.14", features = ["serde", "ahash"], default-features = false } # A faster hashmap, nostd compatible
 num-traits = { version = "0.2", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] } # serialization lib
 postcard = { version = "1.0", features = ["alloc"], default-features = false } # no_std compatible serde serialization format
-bincode = {version = "1.3", optional = true }
+bincode = { version = "1.3", optional = true }
 c2rust-bitfields = { version = "0.18", features = ["no_std"] }
-ahash = { version = "0.8", default-features=false } # The hash function already used in hashbrown
+ahash = { version = "0.8", default-features = false } # The hash function already used in hashbrown
 meminterval = { version = "0.4", features = ["serde"] }
-backtrace = {version = "0.3", optional = true} # Used to get the stacktrace in StacktraceObserver
-typed-builder = { version = "0.16", optional = true } # Implement the builder pattern at compiletime
+backtrace = { version = "0.3", optional = true } # Used to get the stacktrace in StacktraceObserver
+typed-builder = { version = "0.18", optional = true } # Implement the builder pattern at compiletime
 
 serde_json = { version = "1.0", optional = true, default-features = false, features = ["alloc"] }
 nix = { version = "0.27", optional = true }
@@ -170,7 +168,7 @@ libm = "0.2.2"
 ratatui = { version = "0.23.0", default-features = false, features = ['crossterm'], optional = true } # Commandline rendering, for TUI Monitor
 crossterm = { version = "0.27.0", optional = true }
 
-prometheus-client = { version= "0.21", optional = true} # For the prometheus monitor
+prometheus-client = { version = "0.22", optional = true } # For the prometheus monitor
 tide = { version = "0.16.0", optional = true }
 async-std = { version = "1.12.0", features = ["attributes"], optional = true }
 futures = { version = "0.3.24", optional = true }
@@ -179,9 +177,8 @@ tokio = { version = "1.28.1", optional = true, features = ["sync", "net", "rt", 
 
 wait-timeout = { version = "0.2", optional = true } # used by CommandExecutor to wait for child process
 
-z3 = { version = "0.12.0", features = ["static-link-z3"], optional = true } # for concolic mutation
+z3 = { version = "0.12.0", optional = true } # for concolic mutation
 
-pyo3 = { version = "0.18", optional = true, features = ["serde", "macros"] }
 concat-idents = { version = "1.1.3", optional = true }
 
 libcasr = { version = "2.7", optional = true }
@@ -190,8 +187,11 @@ bitvec = { version = "1.0", optional = true, features = ["serde"] } # used for s
 
 arrayvec = { version = "0.7.4", optional = true, default-features = false } # used for fixed-len collects
 
+const_format = "0.2.32" # used for providing helpful compiler output
+const_panic = "0.2.8" # similarly, for formatting const panic output
+
 # optional-dev deps (change when target.'cfg(accessible(::std))'.test-dependencies will be stable)
-serial_test = { version = "2", optional = true, default-features = false, features = ["logging"] }
+serial_test = { version = "3", optional = true, default-features = false, features = ["logging"] }
 
 # Document all features of this crate (for `cargo doc`)
 document-features = { version = "0.2", optional = true }
