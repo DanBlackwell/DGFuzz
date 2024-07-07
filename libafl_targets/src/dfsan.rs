@@ -324,7 +324,6 @@ where
         state: &mut E::State,
         manager: &mut EM,
     ) -> Result<(), Error> {
-        println!("Performing dataflowstage");
 
         let full_neighbours_meta = state
             .metadata::<MapNeighboursFeedbackMetadata>()
@@ -338,11 +337,6 @@ where
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
-            {
-                let mut cov = covered_indexes.iter().copied().collect::<Vec<usize>>();
-                cov.sort();
-                println!("corpus index {:?} covered: {:?}", idx, cov);
-            }
             drop(tc);
 
             let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
@@ -406,7 +400,7 @@ where
 
         if target_bytes.is_empty() { return Ok(()); }
 
-        println!("corpus_idx: {:?}, mutating the set of target byte pos: {:?}", idx, target_byte_pos);
+        // println!("corpus_idx: {:?}, mutating the set of target byte pos: {:?}", idx, target_byte_pos);
 
         let mut mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
 
