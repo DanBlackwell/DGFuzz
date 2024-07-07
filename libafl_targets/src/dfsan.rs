@@ -35,6 +35,7 @@ use libafl::{
     state::{HasCorpus, HasMetadata, HasRand, UsesState}, 
     Error, 
     Evaluator, 
+    ExecuteInputResult,
     HasObjective
 };
 
@@ -165,6 +166,7 @@ where
         manager: &mut EM,
         input: &E::Input,
         labels: &Vec<DFSanLabelInfo>,
+        required_edges: &[usize],
     ) -> Result<HashMap<usize, Vec<u8>>, Error>
     where
         E: UsesState,
@@ -173,13 +175,12 @@ where
         E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasBytesVec,
     {
-        println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
+        // println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
         let mut label_num = 1;
-        println!("trying to get the map");
-        println!("{:?}", self.dfsan_labels_map);
+        // println!("trying to get the map");
+        // println!("{:?}", self.dfsan_labels_map);
         let buf = self.dfsan_labels_map.as_mut_slice();
         unsafe {
-            println!("buf[0]: {:?}", buf[0]);
             buf[0] = labels.len() as u8;
             let mut pos = 1;
             for label in labels {
@@ -195,25 +196,23 @@ where
                 buf[pos+3] = (label.len & 0xFF) as u8;
                 pos += 4;
             }
-            println!("done calcing labels: {:?}", &buf[..pos]);
         }
 
-        println!("will run target!!");
         self.executor.run_target(fuzzer, state, manager, input)?;
 
         let mut labels_for_edge = HashMap::new();
         unsafe {
-            for i in 0..buf.len() {
-                if buf[i] != 0 {
-                    let the_byte = buf[i];
+            for &edge_num in required_edges {
+                if buf[edge_num] != 0 {
+                    let the_byte = buf[edge_num];
                     let mut labels = vec![];
                     for bit in 0..8 {
                         if (the_byte >> bit) & 1 == 1 {
                             labels.push(bit + 1);
                         }
                     }
-                    labels_for_edge.insert(i, labels);
-                    buf[i] = 0;
+                    labels_for_edge.insert(edge_num, labels);
+                    buf[edge_num] = 0;
                 }
             }
         }
@@ -273,7 +272,9 @@ where
         // e.g. if (data[0] + data[3] - data[5] == 0)
         while let Some((edge_idx, byte_range)) = queue.pop() {
             let label_infos = get_labels_for_range(byte_range);
-            let labels_for_edge = self.run_and_collect_labels(fuzzer, executor, state, manager, &input, &label_infos)?;
+            let labels_for_edge = self.run_and_collect_labels(
+                fuzzer, executor, state, manager, &input, &label_infos, required_edges
+            )?;
             if let Some(labels) = labels_for_edge.get(&edge_idx) {
                 for &label in labels {
                     let linfo = label_infos[(label as usize) - 1];
@@ -287,7 +288,11 @@ where
             }
         }
     
-        println!("bytes depended on by edge: {:?}", bytes_depended_on_by_edge);
+        println!("bytes depended on by edge: {:?}", 
+            bytes_depended_on_by_edge.iter()
+            .filter(|(_,x)| x.len() > 0)
+            .collect::<HashMap<&usize, &Vec<usize>>>()
+        );
 
         Ok(bytes_depended_on_by_edge)
     }
@@ -335,6 +340,11 @@ where
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
+            {
+                let mut cov = covered_indexes.iter().copied().collect::<Vec<usize>>();
+                cov.sort();
+                println!("corpus index {:?} covered: {:?}", idx, cov);
+            }
             drop(tc);
 
             let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
@@ -372,8 +382,6 @@ where
             req
         };
 
-        println!("required edges: {:?}", required_edges);
-
         // build a vec of the values of target bytes
         let mut target_byte_pos: Vec<usize> = {
             let mut res = HashSet::new();
@@ -388,8 +396,6 @@ where
         };
         target_byte_pos.sort();
 
-        println!("The set of target byte pos: {:?}", target_byte_pos);
-
         let original_input = tc.input().as_ref().unwrap().clone();
         let target_bytes = {
             let mut res = vec![];
@@ -400,11 +406,14 @@ where
         };
         drop(tc);
 
+        if target_bytes.is_empty() { return Ok(()); }
+
+        println!("corpus_idx: {:?}, mutating the set of target byte pos: {:?}", idx, target_byte_pos);
+
         let mut mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
 
         // mutate these bytes
         for i in 0..128 {
-            if target_bytes.is_empty() { continue; }
 
             let mut input = BytesInput::new(target_bytes.clone());
 
@@ -428,7 +437,11 @@ where
 
             // Time is measured directly the `evaluate_input` function
             let (untransformed, post) = input.try_transform_into(state)?;
-            let (_, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+            let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+            
+            if result == ExecuteInputResult::Corpus {
+                println!("Dataflow stage found a new corpus entry!");
+            }
 
             start_timer!(state);
             mutator.post_exec(state, i as i32, corpus_idx)?;

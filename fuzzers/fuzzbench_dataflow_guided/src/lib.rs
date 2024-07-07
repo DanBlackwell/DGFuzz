@@ -183,9 +183,7 @@ pub extern "C" fn libafl_main() {
 
     let logfile = PathBuf::from(res.get_one::<String>("logfile").unwrap().to_string());
 
-    let dfsan_binary = PathBuf::from(
-        res.get_one::<String>("dfsan_binary").unwrap().to_string()
-    );
+    let dfsan_binary = res.get_one::<String>("dfsan_binary").map(PathBuf::from);
 
     let timeout = Duration::from_millis(
         res.get_one::<String>("timeout")
@@ -232,7 +230,7 @@ fn fuzz(
     cfg_file: Option<PathBuf>,
     logfile: &PathBuf,
     timeout: Duration,
-    dfsan_binary: PathBuf,
+    dfsan_binary: Option<PathBuf>,
 ) -> Result<(), Error> {
     let log = RefCell::new(OpenOptions::new().append(true).create(true).open(logfile)?);
 
@@ -401,6 +399,8 @@ fn fuzz(
         unsafe {
             (
               OwnedMutSlice::from_raw_parts_mut(shmem_buf, MAP_SIZE),
+              // yeah, the compiler allocates a map that's 2 * MAP_SIZE, and we use map[MAP_SIZE..]
+              // for the dfsan map
               OwnedMutSlice::from_raw_parts_mut(shmem_buf.offset(MAP_SIZE as isize), MAP_SIZE),
             )
         }
@@ -410,11 +410,6 @@ fn fuzz(
     std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));
    
     // println!("map_ptr: {:?}, labels: {:?}", map_ptr, dfsan_labels_map_ptr);
-
-    let dataflow = DataflowStage::new(dfsan_binary, timeout, MAP_SIZE, cov_map_slice, dfsan_labels_slice, &mut shmem_provider);
-
-    // The order of the stages matter!
-    let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
 
     // Read tokens
     if state.metadata_map().get::<Tokens>().is_none() {
@@ -478,7 +473,15 @@ fn fuzz(
     // reopen file to make sure we're at the end
     log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
 
-    fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+    if let Some(dfsan_binary) = dfsan_binary {
+        let dataflow = DataflowStage::new(dfsan_binary, timeout, MAP_SIZE, cov_map_slice, dfsan_labels_slice, &mut shmem_provider);
+        // The order of the stages matter!
+        let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
+        fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+    } else {
+        let mut stages = tuple_list!(calibration, tracing, i2s, mutation);
+        fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+    }
 
     // Never reached
     Ok(())

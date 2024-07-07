@@ -1296,8 +1296,6 @@ static void __afl_start_forkserver(void) {
 
     }
   
-    fprintf(stderr, "DEBUG DAN: seems forkserver is up\n");
-
     if (!child_stopped) {
 
       /* Once woken up, create a clone of our process. */

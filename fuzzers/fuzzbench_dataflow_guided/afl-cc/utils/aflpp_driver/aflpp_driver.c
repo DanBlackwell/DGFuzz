@@ -103,11 +103,6 @@ void __tag_input_with_labels(
     dfsan_label labels[8] = {1, 2, 4, 8, 16, 32, 64, 128};
     for (int i = 0; i < num_labels; i++) {
       dfsan_set_label(labels[i], input + label_start_offsets[i], label_block_len[i]);
-
-      // if (__afl_debug) {
-      //   fprintf(stderr, "DEBUG [dfsan]: Setting label %hhu [%lu..%lu)\n", 
-      //           labels[i], label_start_offsets[i], label_start_offsets[i] + label_block_len[i]);
-      // }
     }
 }
 
@@ -116,8 +111,7 @@ void dfsan_add_labels(u8 *input, size_t input_len) {
   size_t label_start_offsets[8];
   size_t label_block_lens[8];
   u8 num_labels = __afl_dataflow_ptr[pos];
-  fprintf(stderr, "DEBUG [dfsan]: have %hhu labels: [", num_labels);
-  fflush(stderr);
+  // fprintf(stderr, "DEBUG [dfsan]: have %hhu labels: [", num_labels);
   pos++;
   for (u8 i = 0; i < num_labels; i++) {
     label_start_offsets[i] = (
@@ -135,9 +129,9 @@ void dfsan_add_labels(u8 *input, size_t input_len) {
       ((u32)__afl_dataflow_ptr[pos+3])
     );
     pos += 4;
-    fprintf(stderr, "{%lu, %lu}, ", label_start_offsets[i], label_start_offsets[i] + label_block_lens[i]);
+    // fprintf(stderr, "{%lu, %lu}, ", label_start_offsets[i], label_start_offsets[i] + label_block_lens[i]);
   }
-  fprintf(stderr, "]\n");
+  // fprintf(stderr, "]\n");
 
   // ok, we got all the label details
   memset(__afl_dataflow_ptr, 0, __afl_map_size);
@@ -145,13 +139,13 @@ void dfsan_add_labels(u8 *input, size_t input_len) {
 }
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
-  fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
-  __afl_dataflow_ptr[last_edge] = (u8)label;
+  // fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
+  __afl_dataflow_ptr[last_edge] |= (u8)label;
 }
 
 void dfsan_init() {
   dfsan_set_conditional_callback(dfsan_found_conditional);
-  fprintf(stderr, "Setting dfsan callback to %p\n", dfsan_found_conditional);
+  // fprintf(stderr, "Setting dfsan callback to %p\n", dfsan_found_conditional);
 }
 
 // Default nop ASan hooks for manual poisoning when not linking the ASan
@@ -496,10 +490,8 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
         dfsan_flush();
         dfsan_add_labels(__afl_fuzz_ptr, length);
 
-      	fprintf(stderr, "DEBUG DAN: ASAN region is poisoned, about to run input with len %zu\n", length);
         if (unlikely(callback(__afl_fuzz_ptr, length) == -1)) {
 
-      	  fprintf(stderr, "DEBUG DAN: that input gave -1\n");
           memset(__afl_area_ptr, 0, __afl_map_size);
           __afl_area_ptr[0] = 1;
 
@@ -512,7 +504,6 @@ __attribute__((weak)) int LLVMFuzzerRunDriver(
   } else {
 
     while (__afl_persistent_loop(N)) {
-      fprintf(stderr, "DEBUG DAN: no ASAN, running callback with input len %u\n", *__afl_fuzz_len);
 
       dfsan_flush();
       dfsan_add_labels(__afl_fuzz_ptr, *__afl_fuzz_len);
