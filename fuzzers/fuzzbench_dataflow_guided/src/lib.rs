@@ -334,12 +334,13 @@ fn fuzz(
     let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
 
     // Setup a MOPT mutator
-    let mutator = StdMOptMutator::new(
-        &mut state,
-        havoc_mutations().merge(tokens_mutations()),
-        7,
-        5,
-    )?;
+    // let mutator = StdMOptMutator::new(
+    //     &mut state,
+    //     havoc_mutations().merge(tokens_mutations()),
+    //     7,
+    //     5,
+    // )?;
+    let mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
 
     let mutation = StdMutationalStage::with_max_iterations(mutator, 1024);
 
@@ -431,17 +432,17 @@ fn fuzz(
         println!("We imported {} inputs from disk.", state.corpus().count());
     }
 
-    // // Remove target output (logs still survive)
-    // #[cfg(unix)]
-    // {
-    //     let null_fd = file_null.as_raw_fd();
-    //     dup2(null_fd, io::stdout().as_raw_fd())?;
-    //     if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
-    //         dup2(null_fd, io::stderr().as_raw_fd())?;
-    //     }
-    // }
-    // // reopen file to make sure we're at the end
-    // log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
+    // Remove target output (logs still survive)
+    #[cfg(unix)]
+    {
+        let null_fd = file_null.as_raw_fd();
+        dup2(null_fd, io::stdout().as_raw_fd())?;
+        if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
+            dup2(null_fd, io::stderr().as_raw_fd())?;
+        }
+    }
+    // reopen file to make sure we're at the end
+    log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
 
     if let Some(dfsan_binary) = dfsan_binary {
         println!("Running with DFSAN Binary");
@@ -470,7 +471,15 @@ fn fuzz(
         // To let know the AFL++ binary that we have a big map
         std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));
 
-        let dataflow = DataflowStage::new(dfsan_binary, timeout, MAP_SIZE, cov_map_slice, dfsan_labels_slice, &mut shmem_provider);
+        let dataflow = DataflowStage::new(
+            dfsan_binary, 
+            timeout, 
+            MAP_SIZE, 
+            cov_map_slice, 
+            dfsan_labels_slice, 
+            &mut shmem_provider,
+            1024
+        );
 
         // The order of the stages matter!
         let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);

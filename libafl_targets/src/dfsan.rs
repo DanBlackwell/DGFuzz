@@ -3,7 +3,7 @@
 use alloc::{
     borrow::ToOwned, collections::binary_heap::BinaryHeap, string::{String, ToString}, vec::Vec
 };
-use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, ops::Range, slice};
+use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, num, ops::Range, slice};
 use hashbrown::{HashMap, HashSet};
 use std::path::PathBuf;
 use nix::sys::signal::Signal;
@@ -21,33 +21,26 @@ use libafl_bolts::{
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    common::HasMetadata,
-    corpus::{Corpus, HasCurrentCorpusId}, 
-    events::{EventFirer, EventRestarter}, 
-    executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, 
-    feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, 
-    inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, 
-    mark_feature_time, 
-    mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, 
-    observers::{MapObserver, ObserversTuple}, 
-    prelude::{HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver, ForkserverExecutor, }, 
-    stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, 
-    start_timer, 
-    state::{HasCorpus, HasRand, UsesState}, 
-    Error, 
-    Evaluator, 
-    ExecuteInputResult,
-    HasObjective
+    common::HasMetadata, corpus::{Corpus, HasCurrentCorpusId}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, observers::{MapObserver, ObserversTuple}, prelude::{ForkserverExecutor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver }, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasRand, UsesState}, Error, Evaluator, ExecuteInputResult, Fuzzer, HasObjective
 };
 
 use libc;
 use libc::{c_uchar, size_t, c_int};
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
+struct FuzzerDataflowMetadata {
+    /// Number of mutations tested for a given target edge (neighbour)
+    pub num_mutations_for_edge: HashMap<usize, usize>,
+}
+
+libafl_bolts::impl_serdeany!(FuzzerDataflowMetadata);
+
+#[derive(Clone,Debug,Serialize,Deserialize)]
 struct TestcaseDataflowMetadata {
+    /// Map from a covered edge to the list of direct neigbours
     pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,
     /// Map from edge index to bytes that the conditional afterwards depends on
-    pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>
+    pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>,
 }
 
 libafl_bolts::impl_serdeany!(TestcaseDataflowMetadata);
@@ -114,6 +107,7 @@ where
     // mutator: StdScheduledMutator<E::Input, HavocMutationsFixedLengthType, E::State>,
     executor: ForkserverExecutor<(HitcountsMapObserver<StdMapObserver<'a, u8, false>>, (TimeObserver, ())), E::State, UnixShMemProvider>,
     dfsan_labels_map: OwnedMutSlice<'a, u8>,
+    mutations_per_stage: usize,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(E, EM, Z)>,
 }
@@ -131,6 +125,7 @@ where
         cov_map_slice: OwnedMutSlice<'a, u8>,
         dfsan_labels_map_slice: OwnedMutSlice<'a, u8>,
         shmem_provider: &mut UnixShMemProvider,
+        mutations_per_stage: usize,
     ) -> Self {
 
         // Create an observation channel using the hitcounts map of AFL++
@@ -153,8 +148,12 @@ where
             .build(tuple_list!(edges_observer, time_observer))
             .unwrap();
 
-        // let dataflow = DataflowStage::new(fs_executor, dfsan_labels_map);
-        DataflowStage { executor, dfsan_labels_map: dfsan_labels_map_slice, phantom: PhantomData }
+        DataflowStage { 
+            executor, 
+            dfsan_labels_map: dfsan_labels_map_slice, 
+            mutations_per_stage, 
+            phantom: PhantomData 
+        }
     }
 
     /// return a hashmap giving a Vec of labels for each edge
@@ -325,6 +324,8 @@ where
         manager: &mut EM,
     ) -> Result<(), Error> {
 
+        let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
+
         let full_neighbours_meta = state
             .metadata::<MapNeighboursFeedbackMetadata>()
             .unwrap();
@@ -350,95 +351,178 @@ where
 
             // println!("corpus_idx {:?}; bytes depended on by edge: {:?}, parents_of_direct_n {:?}", idx, bytes_depended_on_by_edge, parents_of_direct_neighbours);
             
-            let meta = TestcaseDataflowMetadata { bytes_depended_on_by_edge, direct_neighbours_for_edge };
+            let meta = TestcaseDataflowMetadata { 
+                bytes_depended_on_by_edge, 
+                direct_neighbours_for_edge: direct_neighbours_for_edge.clone(),
+            };
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
             tc.add_metadata(meta);
+            drop(tc);
+
+            // Add any new neighbours to the effort tracker
+            let global_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
+            for neighbours in direct_neighbours_for_edge.values() {
+                for neighbour in neighbours {
+                    if global_meta.num_mutations_for_edge.get(neighbour).is_none() {
+                        global_meta.num_mutations_for_edge.insert(*neighbour, 0);
+                    }
+                }
+            }
         } else {
             drop(tc);
         }
 
-        let tc = state.corpus().get(idx).unwrap().borrow();
-        let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
+        let direct_neighbours_for_edge = {
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
+            tc_meta.direct_neighbours_for_edge.clone()
+        };
+        let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
+
+        let mut power_for_mutation_target = HashMap::new();
+        let mut total_muts = 0usize;
+        let mut max_muts = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         let required_edges = {
             let mut req = HashSet::new();
-            for (parent, neighbours) in &df_meta.direct_neighbours_for_edge {
+            for (parent, neighbours) in &direct_neighbours_for_edge {
+                let mut power = 0;
                 for neighbour in neighbours {
                     if !covered_blocks.contains(neighbour) {
                         req.insert(*parent);
-                        break;
+                        let muts = df_meta.num_mutations_for_edge.get(neighbour).unwrap();
+                        max_muts = std::cmp::max(*muts, max_muts);
+                        power += muts;
                     }
                 }
+                total_muts += power;
+                power_for_mutation_target.insert(*parent, power);
             }
             req
         };
 
-        // build a vec of the values of target bytes
-        let mut target_byte_pos: Vec<usize> = {
-            let mut res = HashSet::new();
-            for edge in required_edges {
-                if let Some(dependent_bytes) = df_meta.bytes_depended_on_by_edge.get(&edge) {
-                    for &byte_pos in dependent_bytes {
-                        res.insert(byte_pos);
+        // Calculate how much to mutate the bytes for each target edge
+        let mutations_for_parent = {
+            let mut res = HashMap::new();
+            // we haven't fuzzed any of these yet! Fuzz them all the same amount
+            if total_muts == 0 {
+                let muts = f64::ceil(
+                    num_mutations as f64 / power_for_mutation_target.len() as f64
+                ) as usize;
+                for (edge, _) in power_for_mutation_target {
+                    res.insert(edge, muts);
+                }
+            // Assign more mutations to underserviced edges
+            } else {
+                let required_muts = power_for_mutation_target.len() * max_muts - total_muts;
+                // we can catch all up to the same number of mutations
+                if required_muts < num_mutations {
+                    let mut available_muts = num_mutations;
+                    // make sure that all edges catch up to the same value
+                    for (edge, muts) in &power_for_mutation_target {
+                        available_muts -= max_muts - *muts;
+                        res.insert(*edge, max_muts - *muts);
+                    }
+                    
+                    // distribute the remaining mutations fairly
+                    let power = f64::ceil(
+                        available_muts as f64 / power_for_mutation_target.len() as f64
+                    ) as usize;
+                    for (edge, muts) in res.iter_mut() {
+                        *muts += power;
+                    }
+                } else {
+                    // best effort to even out mutations
+                    for (edge, muts) in power_for_mutation_target {
+                        // figure out how far this edge is behind proportionally
+                        let to_perform = f64::ceil(
+                            ((max_muts - muts) as f64 / required_muts as f64)
+                            * num_mutations as f64
+                        ) as usize;
+
+                        if to_perform > 0 {
+                            res.insert(edge, to_perform);
+                        }
                     }
                 }
             }
-            res.into_iter().collect()
-        };
-        target_byte_pos.sort();
-
-        let original_input = tc.input().as_ref().unwrap().clone();
-        let target_bytes = {
-            let mut res = vec![];
-            for &pos in &target_byte_pos {
-                res.push(original_input.bytes()[pos]);
-            }
             res
         };
-        drop(tc);
 
-        if target_bytes.is_empty() { return Ok(()); }
+        let mut mutator = StdScheduledMutator::with_max_stack_pow(
+            havoc_mutations_fixed_length(), 6
+        );
 
-        // println!("corpus_idx: {:?}, mutating the set of target byte pos: {:?}", idx, target_byte_pos);
-
-        let mut mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
-
-        // mutate these bytes
-        for i in 0..128 {
-
-            let mut input = BytesInput::new(target_bytes.clone());
-
-            start_timer!(state);
-            let mutated = mutator.mutate(state, &mut input)?;
-            mark_feature_time!(state, PerfFeature::Mutate);
-
-            if mutated == MutationResult::Skipped {
-                continue;
+        {
+            // update the mutation counts for all the targets
+            let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
+            for (parent, _neighbours) in direct_neighbours_for_edge {
+                if let Some(muts) = mutations_for_parent.get(&parent) {
+                    let count = df_meta.num_mutations_for_edge.get_mut(&parent).unwrap();
+                    *count += *muts;
+                }
             }
+        }
 
-            let altered_bytes = input.bytes();
-            assert!(altered_bytes.len() == target_bytes.len());
+        let original_input = {
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            tc.input().as_ref().unwrap().clone()
+        };
 
-            let mut input = original_input.clone();
-            let bytes = input.bytes_mut();
-            for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
-                bytes[*dest_pos] = altered_bytes[arr_idx];
-            }
-            // println!("Mutated target bytes {:?}, at pos {:?}; end result: {:?}", altered_bytes, target_byte_pos, bytes);
+        for (parent, num_mutations) in mutations_for_parent {
+            // build a vec of the values of target bytes
+            let mut target_byte_pos: Vec<usize> = {
+                let tc = state.corpus().get(idx).unwrap().borrow();
+                let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
+                tc_meta.bytes_depended_on_by_edge.get(&parent).unwrap().clone()
+            };
+            target_byte_pos.sort();
 
-            // Time is measured directly the `evaluate_input` function
-            let (untransformed, post) = input.try_transform_into(state)?;
-            let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+            let target_bytes = {
+                let mut res = vec![];
+                for &pos in &target_byte_pos {
+                    res.push(original_input.bytes()[pos]);
+                }
+                res
+            };
+
+            if target_bytes.is_empty() { continue; }
+
+            for i in 0..num_mutations {
+                let mut input = BytesInput::new(target_bytes.clone());
+
+                start_timer!(state);
+                let mutated = mutator.mutate(state, &mut input)?;
+                mark_feature_time!(state, PerfFeature::Mutate);
+
+                if mutated == MutationResult::Skipped {
+                    continue;
+                }
+
+                let altered_bytes = input.bytes();
+                assert!(altered_bytes.len() == target_bytes.len());
+
+                let mut input = original_input.clone();
+                let bytes = input.bytes_mut();
+                for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
+                    bytes[*dest_pos] = altered_bytes[arr_idx];
+                }
+                // println!("Mutated target bytes {:?}, at pos {:?}; end result: {:?}", altered_bytes, target_byte_pos, bytes);
+
+                // Time is measured directly the `evaluate_input` function
+                let (untransformed, post) = input.try_transform_into(state)?;
+                let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
             
-            if result == ExecuteInputResult::Corpus {
-                println!("Dataflow stage found a new corpus entry!");
-            }
+                if result == ExecuteInputResult::Corpus {
+                    println!("Dataflow stage found a new corpus entry!");
+                }
 
-            start_timer!(state);
-            mutator.post_exec(state, corpus_idx)?;
-            post.post_exec(state, corpus_idx)?;
-            mark_feature_time!(state, PerfFeature::MutatePostExec);
+                start_timer!(state);
+                mutator.post_exec(state, corpus_idx)?;
+                post.post_exec(state, corpus_idx)?;
+                mark_feature_time!(state, PerfFeature::MutatePostExec);
+            }
         }
 
         Ok(())

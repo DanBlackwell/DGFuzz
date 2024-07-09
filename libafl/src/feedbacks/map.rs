@@ -14,7 +14,7 @@ use core::{
 use libafl_bolts::AsSlice;
 use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef},
-    AsIter, HasRefCnt, Named,
+    AsIter, HasRefCnt, Named, AsSlice
 };
 use num_traits::PrimInt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
