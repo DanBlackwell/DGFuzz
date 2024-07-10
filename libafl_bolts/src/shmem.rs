@@ -81,6 +81,16 @@ pub type StdServedShMemProvider = RcShMemProvider<ServedShMemProvider<MmapShMemP
 ))]
 pub type StdServedShMemProvider = RcShMemProvider<ServedShMemProvider<MmapShMemProvider>>;
 
+#[derive(Clone,Debug,Serialize,Deserialize)]
+pub struct ShMemMetadata {
+    /// identifier for the forkserver map's shared memory
+    pub fserver_map_description: ShMemDescription,
+    /// identifier for the forkserver input's shared memory
+    pub fserver_input_description: Option<ShMemDescription>,
+}
+
+crate::impl_serdeany!(ShMemMetadata);
+
 /// Description of a shared map.
 /// May be used to restore the map by id.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -90,6 +100,8 @@ pub struct ShMemDescription {
     /// Id of this map
     pub id: ShMemId,
 }
+
+crate::impl_serdeany!(ShMemDescription);
 
 impl ShMemDescription {
     /// Create a description from a `id_str` and a `size`.
@@ -112,6 +124,8 @@ impl ShMemDescription {
 pub struct ShMemId {
     id: [u8; 20],
 }
+
+crate::impl_serdeany!(ShMemId);
 
 impl ShMemId {
     /// Create a new id from a fixed-size string/bytes array

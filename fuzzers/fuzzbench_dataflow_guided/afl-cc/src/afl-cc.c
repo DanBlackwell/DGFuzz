@@ -656,6 +656,8 @@ void compiler_mode_by_callname(aflcc_state_t *aflcc) {
     insert_param(aflcc, "-fsanitize=dataflow");
     insert_param(aflcc, "-mllvm");
     insert_param(aflcc, "-dfsan-conditional-callbacks=true");
+    insert_param(aflcc, "-mllvm");
+    insert_param(aflcc, "-dfsan-combine-pointer-labels-on-store=true");
 
   }
 

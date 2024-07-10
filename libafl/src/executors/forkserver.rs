@@ -21,7 +21,7 @@ use std::{
 use libafl_bolts::{
     fs::{get_unique_std_input_file, InputFile},
     os::{dup2, pipes::Pipe},
-    shmem::{ShMem, ShMemProvider, UnixShMemProvider},
+    shmem::{ShMem, ShMemDescription, ShMemProvider, UnixShMemProvider},
     tuples::{Handle, Handled, MatchNameRef, Prepend, RefIndexable},
     AsSlice, AsSliceMut, Truncate,
 };
@@ -596,6 +596,15 @@ where
     pub fn coverage_map_size(&self) -> Option<usize> {
         self.map_size
     }
+
+    /// description for the shared mem used for inputs (if any)
+    pub fn input_shared_mem_description(&self) -> Option<ShMemDescription> {
+        if let Some(map) = &self.map {
+            Some(map.description())
+        } else {
+            None
+        }
+    }
 }
 
 /// The builder for `ForkserverExecutor`
@@ -613,6 +622,7 @@ pub struct ForkserverExecutorBuilder<'a, SP> {
     autotokens: Option<&'a mut Tokens>,
     input_filename: Option<OsString>,
     shmem_provider: Option<&'a mut SP>,
+    shmem_description: Option<ShMemDescription>,
     max_input_size: usize,
     map_size: Option<usize>,
     kill_signal: Option<Signal>,
@@ -757,7 +767,11 @@ impl<'a, SP> ForkserverExecutorBuilder<'a, SP> {
             None => None,
             Some(provider) => {
                 // setup shared memory
-                let mut shmem = provider.new_shmem(self.max_input_size + SHMEM_FUZZ_HDR_SIZE)?;
+                let mut shmem = if let Some(desc) = self.shmem_description {
+                    provider.shmem_from_description(desc)
+                } else {
+                    provider.new_shmem(self.max_input_size + SHMEM_FUZZ_HDR_SIZE)
+                }?;
                 shmem.write_to_env("__AFL_SHM_FUZZ_ID")?;
 
                 let size_in_bytes = (self.max_input_size + SHMEM_FUZZ_HDR_SIZE).to_ne_bytes();
@@ -1129,6 +1143,7 @@ impl<'a> ForkserverExecutorBuilder<'a, UnixShMemProvider> {
             autotokens: None,
             input_filename: None,
             shmem_provider: None,
+            shmem_description: None,
             map_size: None,
             max_input_size: MAX_INPUT_SIZE_DEFAULT,
             kill_signal: None,
@@ -1142,6 +1157,7 @@ impl<'a> ForkserverExecutorBuilder<'a, UnixShMemProvider> {
     pub fn shmem_provider<SP: ShMemProvider>(
         self,
         shmem_provider: &'a mut SP,
+        shmem_description: Option<ShMemDescription>,
     ) -> ForkserverExecutorBuilder<'a, SP> {
         ForkserverExecutorBuilder {
             program: self.program,
@@ -1155,6 +1171,7 @@ impl<'a> ForkserverExecutorBuilder<'a, UnixShMemProvider> {
             autotokens: self.autotokens,
             input_filename: self.input_filename,
             shmem_provider: Some(shmem_provider),
+            shmem_description: shmem_description,
             map_size: self.map_size,
             max_input_size: MAX_INPUT_SIZE_DEFAULT,
             kill_signal: None,
@@ -1352,7 +1369,7 @@ mod tests {
             .program(bin)
             .args(args)
             .debug_child(false)
-            .shmem_provider(&mut shmem_provider)
+            .shmem_provider(&mut shmem_provider, None)
             .build::<_, ()>(tuple_list!(edges_observer));
 
         // Since /usr/bin/echo is not a instrumented binary file, the test will just check if the forkserver has failed at the initial handshake

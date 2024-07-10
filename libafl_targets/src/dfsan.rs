@@ -11,20 +11,17 @@ use nix::sys::signal::Signal;
 
 // use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
+    prelude::{OwnedMutSlice, UnixShMemProvider}, 
     rands::Rand, 
-    tuples::{tuple_list, tuple_list_type, MatchName}, 
-    AsSliceMut,
-    prelude::{OwnedMutSlice, ShMemProvider, UnixShMemProvider},
-    shmem::ShMem,
+    shmem::{ShMemDescription, ShMemMetadata}, 
+    tuples::{tuple_list, tuple_list_type}, 
+    AsSliceMut
 };
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    common::HasMetadata, corpus::{Corpus, HasCurrentCorpusId}, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, observers::{MapObserver, ObserversTuple}, prelude::{ForkserverExecutor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver }, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasRand, UsesState}, Error, Evaluator, ExecuteInputResult, Fuzzer, HasObjective
+    common::HasMetadata, corpus::Corpus, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, observers::{MapObserver, ObserversTuple}, prelude::{ForkserverExecutor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver }, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasRand, UsesState}, Error, Evaluator, ExecuteInputResult, Fuzzer, HasObjective
 };
-
-use libc;
-use libc::{c_uchar, size_t, c_int};
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
 struct FuzzerDataflowMetadata {
@@ -46,7 +43,6 @@ libafl_bolts::impl_serdeany!(TestcaseDataflowMetadata);
 
 #[derive(Copy,Clone,Debug)]
 struct DFSanLabelInfo {
-    label: u8,
     start_pos: usize,
     len: usize
 }
@@ -114,29 +110,33 @@ where
 impl<'a, EM, E, Z> DataflowStage<'a, EM, E, Z>
 where 
     E: UsesState + UsesInput, 
-    E::State: HasRand, 
+    E::State: HasRand + HasMetadata,
     E::Input: HasMutatorBytes + HasTargetBytes,
 {
+    /// Create a new instance, this includes a forkserver
     pub fn new(
+        state: &mut E::State,
         dfsan_binary_path: PathBuf, 
         timeout: std::time::Duration,
         map_size: usize,
         cov_map_slice: OwnedMutSlice<'a, u8>,
         dfsan_labels_map_slice: OwnedMutSlice<'a, u8>,
         shmem_provider: &mut UnixShMemProvider,
+        input_shmem_desc: Option<ShMemDescription>,
         mutations_per_stage: usize,
     ) -> Self {
 
         // Create an observation channel using the hitcounts map of AFL++
-        let edges_observer =
-            unsafe { HitcountsMapObserver::new(StdMapObserver::from_ownedref("edges_map", cov_map_slice)) };
+        let edges_observer = HitcountsMapObserver::new(
+            StdMapObserver::from_ownedref("edges_map", cov_map_slice)
+        );
 
         // Create an observation channel to keep track of the execution time
         let time_observer = TimeObserver::new("time");
     
         let mut fs_builder = ForkserverExecutor::builder()
             .program(dfsan_binary_path)
-            .shmem_provider(shmem_provider)
+            .shmem_provider(shmem_provider, input_shmem_desc)
             .debug_child(true)
             // .parse_afl_cmdline(arguments)
             .coverage_map_size(map_size)
@@ -146,6 +146,10 @@ where
         let mut executor = fs_builder
             .build(tuple_list!(edges_observer, time_observer))
             .unwrap();
+
+        if let Ok(shmem_meta) = state.metadata_mut::<ShMemMetadata>() {
+            shmem_meta.fserver_input_description = executor.input_shared_mem_description();
+        }
 
         DataflowStage { 
             executor, 
@@ -174,44 +178,39 @@ where
         E::Input: HasMutatorBytes,
     {
         // println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
-        let mut label_num = 1;
         // println!("trying to get the map");
         // println!("{:?}", self.dfsan_labels_map);
         let buf = self.dfsan_labels_map.as_slice_mut();
-        unsafe {
-            buf[0] = labels.len() as u8;
-            let mut pos = 1;
-            for label in labels {
-                buf[pos]   = ((label.start_pos >> 24) & 0xFF) as u8;
-                buf[pos+1] = ((label.start_pos >> 16) & 0xFF) as u8;
-                buf[pos+2] = ((label.start_pos >> 8)  & 0xFF) as u8;
-                buf[pos+3] = (label.start_pos & 0xFF) as u8;
-                pos += 4;
+        buf[0] = labels.len() as u8;
+        let mut pos = 1;
+        for label in labels {
+            buf[pos]   = ((label.start_pos >> 24) & 0xFF) as u8;
+            buf[pos+1] = ((label.start_pos >> 16) & 0xFF) as u8;
+            buf[pos+2] = ((label.start_pos >> 8)  & 0xFF) as u8;
+            buf[pos+3] = (label.start_pos & 0xFF) as u8;
+            pos += 4;
 
-                buf[pos]   = ((label.len >> 24) & 0xFF) as u8;
-                buf[pos+1] = ((label.len >> 16) & 0xFF) as u8;
-                buf[pos+2] = ((label.len >> 8)  & 0xFF) as u8;
-                buf[pos+3] = (label.len & 0xFF) as u8;
-                pos += 4;
-            }
+            buf[pos]   = ((label.len >> 24) & 0xFF) as u8;
+            buf[pos+1] = ((label.len >> 16) & 0xFF) as u8;
+            buf[pos+2] = ((label.len >> 8)  & 0xFF) as u8;
+            buf[pos+3] = (label.len & 0xFF) as u8;
+            pos += 4;
         }
 
         self.executor.run_target(fuzzer, state, manager, input)?;
 
         let mut labels_for_edge = HashMap::new();
-        unsafe {
-            for &edge_num in required_edges {
-                if buf[edge_num] != 0 {
-                    let the_byte = buf[edge_num];
-                    let mut labels = vec![];
-                    for bit in 0..8 {
-                        if (the_byte >> bit) & 1 == 1 {
-                            labels.push(bit + 1);
-                        }
+        for &edge_num in required_edges {
+            if buf[edge_num] != 0 {
+                let the_byte = buf[edge_num];
+                let mut labels = vec![];
+                for bit in 0..8 {
+                    if (the_byte >> bit) & 1 == 1 {
+                        labels.push(bit + 1);
                     }
-                    labels_for_edge.insert(edge_num, labels);
-                    buf[edge_num] = 0;
                 }
+                labels_for_edge.insert(edge_num, labels);
+                buf[edge_num] = 0;
             }
         }
 
@@ -246,11 +245,11 @@ where
                     let start_offset = ((idx as f64) / 8f64 * (range.len() as f64)).floor() as usize;
                     let end_offset = ((idx as f64 + 1f64) / 8f64 * (range.len() as f64)).floor() as usize;
                     let len = end_offset - start_offset;
-                    labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + start_offset, len });
+                    labels.push(DFSanLabelInfo { start_pos: range.start + start_offset, len });
                 }
             } else {
                 for idx in 0..range.len() {
-                    labels.push(DFSanLabelInfo { label: idx as u8, start_pos: range.start + idx, len: 1 });
+                    labels.push(DFSanLabelInfo { start_pos: range.start + idx, len: 1 });
                 }
             }
             labels
@@ -472,7 +471,7 @@ where
         // iterate through all of the edges with uncovered neighbours and test out
         // num_mutations different mutants
         for (parent, num_mutations) in &mutations_for_parent {
-            let mut target_byte_pos = bytes_depended_on_by_edge.get(parent).unwrap();
+            let mut target_byte_pos = bytes_depended_on_by_edge.get(parent).unwrap().clone();
             target_byte_pos.sort();
 
             // build a vec of the values of target bytes

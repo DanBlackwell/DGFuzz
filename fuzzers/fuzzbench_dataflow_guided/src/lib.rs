@@ -43,9 +43,9 @@ use libafl::{
 use libafl_bolts::{
     current_time,
     os::dup2,
-    prelude::OwnedMutSlice,
+    prelude::{OwnedMutSlice, ShMemDescription},
     rands::StdRand,
-    shmem::{ShMemProvider, StdShMemProvider, ShMem},
+    shmem::{ShMemProvider, StdShMemProvider, ShMem, ShMemMetadata},
     tuples::{tuple_list, Merge},
     AsSlice,
 };
@@ -450,14 +450,31 @@ fn fuzz(
         // to house all potential coverage maps for our targets
         // (we will eventually reduce the used size according to the actual map)
         const MAP_SIZE: usize = 2_621_440 / 2;
-        // The coverage map shared between observer and executor
-        let mut fs_shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
+
+        let (mut fs_map_shmem, fs_input_shmem_desc) = if let Ok(shmem_meta) = state.metadata::<ShMemMetadata>() {
+            let map_shmem = shmem_provider
+                .shmem_from_description(shmem_meta.fserver_map_description)
+                .unwrap();
+            println!("Loading shmem from metadata desc: map: {:?}, input: {:?}",
+                shmem_meta.fserver_map_description, shmem_meta.fserver_input_description);
+            (map_shmem, shmem_meta.fserver_input_description)
+
+        } else {
+            // The coverage map shared between observer and executor
+            let map_shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
+            state.add_metadata(ShMemMetadata { 
+                fserver_map_description: map_shmem.description(),
+                fserver_input_description: None
+            });
+
+            (map_shmem, None)
+        };
 
         // let the forkserver know the shmid
-        fs_shmem.write_to_env("__AFL_SHM_ID").unwrap();
+        fs_map_shmem.write_to_env("__AFL_SHM_ID").unwrap();
 
         let (cov_map_slice, dfsan_labels_slice) = {
-            let shmem_buf = fs_shmem.as_mut_ptr_of::<u8>().unwrap();
+            let shmem_buf = fs_map_shmem.as_mut_ptr_of::<u8>().unwrap();
             unsafe {
                 (
                   OwnedMutSlice::from_raw_parts_mut(shmem_buf, MAP_SIZE),
@@ -472,12 +489,14 @@ fn fuzz(
         std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));
 
         let dataflow = DataflowStage::new(
+            &mut state,
             dfsan_binary, 
             timeout, 
             MAP_SIZE, 
             cov_map_slice, 
             dfsan_labels_slice, 
             &mut shmem_provider,
+            fs_input_shmem_desc,
             1024
         );
 

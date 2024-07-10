@@ -33,6 +33,7 @@ libafl_cc = { path = "../../libafl_cc/" }
 clap = { version = "4.0", features = ["default"] }
 nix = { version = "0.27", features = ["fs"] }
 mimalloc = { version = "*", default-features = false }
+serde = "1.0.204"
 
 [lib]
 name = "fuzzbench"
