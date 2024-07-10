@@ -485,7 +485,7 @@ where
 
             if target_bytes.is_empty() { continue; }
 
-            println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
+            // println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
 
             // test out num_mutations different mutants
             for _ in 0..*num_mutations {

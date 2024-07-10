@@ -501,7 +501,7 @@ fn fuzz(
         );
 
         // The order of the stages matter!
-        let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
+        let mut stages = tuple_list!(calibration, tracing, i2s, dataflow, mutation);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
 
