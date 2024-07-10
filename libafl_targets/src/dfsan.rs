@@ -13,7 +13,6 @@ use nix::sys::signal::Signal;
 use libafl_bolts::{
     rands::Rand, 
     tuples::{tuple_list, tuple_list_type, MatchName}, 
-    AsSlice, 
     AsSliceMut,
     prelude::{OwnedMutSlice, ShMemProvider, UnixShMemProvider},
     shmem::ShMem,
@@ -324,6 +323,12 @@ where
         manager: &mut EM,
     ) -> Result<(), Error> {
 
+        if state.metadata::<FuzzerDataflowMetadata>().is_err() {
+            state.add_metadata(
+                FuzzerDataflowMetadata { num_mutations_for_edge: HashMap::new() }
+            );
+        }
+
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
 
         let full_neighbours_meta = state
@@ -381,26 +386,23 @@ where
 
         let mut power_for_mutation_target = HashMap::new();
         let mut total_muts = 0usize;
-        let mut max_muts = 0usize;
+        let mut max_power = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        let required_edges = {
-            let mut req = HashSet::new();
-            for (parent, neighbours) in &direct_neighbours_for_edge {
-                let mut power = 0;
-                for neighbour in neighbours {
-                    if !covered_blocks.contains(neighbour) {
-                        req.insert(*parent);
-                        let muts = df_meta.num_mutations_for_edge.get(neighbour).unwrap();
-                        max_muts = std::cmp::max(*muts, max_muts);
-                        power += muts;
-                    }
+        for (parent, neighbours) in &direct_neighbours_for_edge {
+            let mut power = 0;
+            for neighbour in neighbours {
+                if !covered_blocks.contains(neighbour) {
+                    let muts = df_meta.num_mutations_for_edge.get(neighbour).unwrap();
+                    power += muts;
                 }
-                total_muts += power;
-                power_for_mutation_target.insert(*parent, power);
             }
-            req
-        };
+            if power > max_power { max_power = power; }
+            total_muts += power;
+            // println!("adding {power} muts for parent {parent}, total muts now {total_muts}");
+            power_for_mutation_target.insert(*parent, power);
+        }
+
 
         // Calculate how much to mutate the bytes for each target edge
         let mutations_for_parent = {
@@ -410,36 +412,40 @@ where
                 let muts = f64::ceil(
                     num_mutations as f64 / power_for_mutation_target.len() as f64
                 ) as usize;
+                // println!("  total_muts 0, setting muts to {muts} for all edges");
                 for (edge, _) in power_for_mutation_target {
                     res.insert(edge, muts);
                 }
             // Assign more mutations to underserviced edges
             } else {
-                let required_muts = power_for_mutation_target.len() * max_muts - total_muts;
+                let required_muts = power_for_mutation_target.len() * max_power - total_muts;
                 // we can catch all up to the same number of mutations
                 if required_muts < num_mutations {
                     let mut available_muts = num_mutations;
                     // make sure that all edges catch up to the same value
                     for (edge, muts) in &power_for_mutation_target {
-                        available_muts -= max_muts - *muts;
-                        res.insert(*edge, max_muts - *muts);
+                        available_muts -= max_power - *muts;
+                        res.insert(*edge, max_power - *muts);
                     }
                     
                     // distribute the remaining mutations fairly
                     let power = f64::ceil(
                         available_muts as f64 / power_for_mutation_target.len() as f64
                     ) as usize;
-                    for (edge, muts) in res.iter_mut() {
+                    // println!("distributing {available_muts} among all entries (getting {power} muts each)");
+                    for (_edge, muts) in res.iter_mut() {
                         *muts += power;
                     }
                 } else {
+                    // println!("Making best effort to distribute {num_mutations} between all entries");
                     // best effort to even out mutations
                     for (edge, muts) in power_for_mutation_target {
                         // figure out how far this edge is behind proportionally
                         let to_perform = f64::ceil(
-                            ((max_muts - muts) as f64 / required_muts as f64)
+                            ((max_power - muts) as f64 / required_muts as f64)
                             * num_mutations as f64
                         ) as usize;
+                        // println!("Have {muts} muts for {edge}, trying to catch up {} (required_muts: {required_muts}, num_mutation {num_mutations}, to_perform {to_perform})", max_power - muts);
 
                         if to_perform > 0 {
                             res.insert(edge, to_perform);
@@ -454,31 +460,22 @@ where
             havoc_mutations_fixed_length(), 6
         );
 
-        {
-            // update the mutation counts for all the targets
-            let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for (parent, _neighbours) in direct_neighbours_for_edge {
-                if let Some(muts) = mutations_for_parent.get(&parent) {
-                    let count = df_meta.num_mutations_for_edge.get_mut(&parent).unwrap();
-                    *count += *muts;
-                }
-            }
-        }
-
-        let original_input = {
+        let (original_input, bytes_depended_on_by_edge) = {
             let tc = state.corpus().get(idx).unwrap().borrow();
-            tc.input().as_ref().unwrap().clone()
+            let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
+            (
+                tc.input().as_ref().unwrap().clone(),
+                tc_meta.bytes_depended_on_by_edge.clone()
+            )
         };
 
-        for (parent, num_mutations) in mutations_for_parent {
-            // build a vec of the values of target bytes
-            let mut target_byte_pos: Vec<usize> = {
-                let tc = state.corpus().get(idx).unwrap().borrow();
-                let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
-                tc_meta.bytes_depended_on_by_edge.get(&parent).unwrap().clone()
-            };
+        // iterate through all of the edges with uncovered neighbours and test out
+        // num_mutations different mutants
+        for (parent, num_mutations) in &mutations_for_parent {
+            let mut target_byte_pos = bytes_depended_on_by_edge.get(parent).unwrap();
             target_byte_pos.sort();
 
+            // build a vec of the values of target bytes
             let target_bytes = {
                 let mut res = vec![];
                 for &pos in &target_byte_pos {
@@ -489,7 +486,10 @@ where
 
             if target_bytes.is_empty() { continue; }
 
-            for i in 0..num_mutations {
+            println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
+
+            // test out num_mutations different mutants
+            for _ in 0..*num_mutations {
                 let mut input = BytesInput::new(target_bytes.clone());
 
                 start_timer!(state);
@@ -505,6 +505,7 @@ where
 
                 let mut input = original_input.clone();
                 let bytes = input.bytes_mut();
+                // replace the target bytes with the mutated byte values
                 for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
                     bytes[*dest_pos] = altered_bytes[arr_idx];
                 }
@@ -522,6 +523,19 @@ where
                 mutator.post_exec(state, corpus_idx)?;
                 post.post_exec(state, corpus_idx)?;
                 mark_feature_time!(state, PerfFeature::MutatePostExec);
+            }
+        }
+
+        {
+            // update the mutation counts for all the targets
+            let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
+            for (parent, neighbours) in direct_neighbours_for_edge {
+                if let Some(muts) = mutations_for_parent.get(&parent) {
+                    for neighbour in &neighbours {
+                        let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
+                        *count += *muts;
+                    }
+                }
             }
         }
 

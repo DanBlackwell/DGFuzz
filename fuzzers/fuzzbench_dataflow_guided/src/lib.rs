@@ -432,17 +432,17 @@ fn fuzz(
         println!("We imported {} inputs from disk.", state.corpus().count());
     }
 
-    // Remove target output (logs still survive)
-    #[cfg(unix)]
-    {
-        let null_fd = file_null.as_raw_fd();
-        dup2(null_fd, io::stdout().as_raw_fd())?;
-        if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
-            dup2(null_fd, io::stderr().as_raw_fd())?;
-        }
-    }
-    // reopen file to make sure we're at the end
-    log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
+    // // Remove target output (logs still survive)
+    // #[cfg(unix)]
+    // {
+    //     let null_fd = file_null.as_raw_fd();
+    //     dup2(null_fd, io::stdout().as_raw_fd())?;
+    //     if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
+    //         dup2(null_fd, io::stderr().as_raw_fd())?;
+    //     }
+    // }
+    // // reopen file to make sure we're at the end
+    // log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
 
     if let Some(dfsan_binary) = dfsan_binary {
         println!("Running with DFSAN Binary");

@@ -10,11 +10,11 @@ use core::{
     ops::{BitAnd, BitOr, Deref, DerefMut},
 };
 
-#[rustversion::nightly]
+// #[rustversion::nightly]
 use libafl_bolts::AsSlice;
 use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef},
-    AsIter, HasRefCnt, Named, AsSlice
+    AsIter, HasRefCnt, Named
 };
 use num_traits::PrimInt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
