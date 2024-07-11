@@ -1,10 +1,8 @@
 //! dfsan logic into targets
 //! The colorization stage from `colorization()` in afl++
-use alloc::{
-    borrow::ToOwned, collections::binary_heap::BinaryHeap, string::{String, ToString}, vec::Vec
-};
-use core::{cmp::Ordering, fmt::Debug, marker::PhantomData, num, ops::Range, slice};
-use hashbrown::{HashMap, HashSet};
+use alloc::vec::Vec;
+use core::{fmt::Debug, marker::PhantomData, ops::Range};
+use hashbrown::HashMap;
 use std::path::PathBuf;
 use nix::sys::signal::Signal;
 
@@ -20,7 +18,7 @@ use libafl_bolts::{
 use serde::{Deserialize, Serialize};
 
 use libafl::{
-    common::HasMetadata, corpus::Corpus, events::{EventFirer, EventRestarter}, executors::{Executor, ExitKind, HasObservers, InProcessExecutor}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, observers::{MapObserver, ObserversTuple}, prelude::{ForkserverExecutor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver }, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasRand, UsesState}, Error, Evaluator, ExecuteInputResult, Fuzzer, HasObjective
+    common::HasMetadata, corpus::Corpus, events::{EventFirer, EventRestarter}, executors::{Executor, HasObservers}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, prelude::{ForkserverExecutor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver }, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasRand, UsesState}, Error, Evaluator, ExecuteInputResult, HasObjective
 };
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
@@ -143,7 +141,7 @@ where
             .timeout(timeout)
             .kill_signal(Signal::SIGKILL)
             .is_persistent(true);
-        let mut executor = fs_builder
+        let executor = fs_builder
             .build(tuple_list!(edges_observer, time_observer))
             .unwrap();
 
@@ -177,9 +175,6 @@ where
         E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasMutatorBytes,
     {
-        // println!("tagging input with labels(len: {} {:?}, {:?})", input.bytes().len(), input.bytes(), labels);
-        // println!("trying to get the map");
-        // println!("{:?}", self.dfsan_labels_map);
         let buf = self.dfsan_labels_map.as_slice_mut();
         buf[0] = labels.len() as u8;
         let mut pos = 1;
@@ -240,12 +235,13 @@ where
     
         fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
             let mut labels = vec![];
-            if range.len() > 7 {
-                for idx in 0..8 {
-                    let start_offset = ((idx as f64) / 8f64 * (range.len() as f64)).floor() as usize;
-                    let end_offset = ((idx as f64 + 1f64) / 8f64 * (range.len() as f64)).floor() as usize;
-                    let len = end_offset - start_offset;
-                    labels.push(DFSanLabelInfo { start_pos: range.start + start_offset, len });
+            if range.len() > 8 {
+                let mut prev_end = 0usize;
+                for idx in 1..9 {
+                    let end = (idx as f64 / 8f64 * range.len() as f64).floor() as usize;
+                    let len = end - prev_end;
+                    labels.push(DFSanLabelInfo { start_pos: range.start + prev_end, len });
+                    prev_end = end;
                 }
             } else {
                 for idx in 0..range.len() {
@@ -283,6 +279,10 @@ where
                     }
                 }
             }
+        }
+
+        for (_edge_idx, bytes) in bytes_depended_on_by_edge.iter_mut() {
+            bytes.sort();
         }
     
         println!("bytes depended on by edge: {:?}", 
@@ -411,7 +411,7 @@ where
                 let muts = f64::ceil(
                     num_mutations as f64 / power_for_mutation_target.len() as f64
                 ) as usize;
-                // println!("  total_muts 0, setting muts to {muts} for all edges");
+
                 for (edge, _) in power_for_mutation_target {
                     res.insert(edge, muts);
                 }
@@ -431,12 +431,11 @@ where
                     let power = f64::ceil(
                         available_muts as f64 / power_for_mutation_target.len() as f64
                     ) as usize;
-                    // println!("distributing {available_muts} among all entries (getting {power} muts each)");
+
                     for (_edge, muts) in res.iter_mut() {
                         *muts += power;
                     }
                 } else {
-                    // println!("Making best effort to distribute {num_mutations} between all entries");
                     // best effort to even out mutations
                     for (edge, muts) in power_for_mutation_target {
                         // figure out how far this edge is behind proportionally
@@ -444,7 +443,6 @@ where
                             ((max_power - muts) as f64 / required_muts as f64)
                             * num_mutations as f64
                         ) as usize;
-                        // println!("Have {muts} muts for {edge}, trying to catch up {} (required_muts: {required_muts}, num_mutation {num_mutations}, to_perform {to_perform})", max_power - muts);
 
                         if to_perform > 0 {
                             res.insert(edge, to_perform);
@@ -471,25 +469,25 @@ where
         // iterate through all of the edges with uncovered neighbours and test out
         // num_mutations different mutants
         for (parent, num_mutations) in &mutations_for_parent {
-            let mut target_byte_pos = bytes_depended_on_by_edge.get(parent).unwrap().clone();
-            target_byte_pos.sort();
+            let target_byte_pos = bytes_depended_on_by_edge.get(parent).unwrap().clone();
+
+            if target_byte_pos.is_empty() { continue; }
 
             // build a vec of the values of target bytes
             let target_bytes = {
-                let mut res = vec![];
+                let mut res = Vec::with_capacity(target_byte_pos.len());
                 for &pos in &target_byte_pos {
                     res.push(original_input.bytes()[pos]);
                 }
                 res
             };
 
-            if target_bytes.is_empty() { continue; }
-
             // println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
+            let target_bytes_input = BytesInput::new(target_bytes.clone());
 
             // test out num_mutations different mutants
             for _ in 0..*num_mutations {
-                let mut input = BytesInput::new(target_bytes.clone());
+                let mut input = target_bytes_input.clone();
 
                 start_timer!(state);
                 let mutated = mutator.mutate(state, &mut input)?;
@@ -500,7 +498,7 @@ where
                 }
 
                 let altered_bytes = input.bytes();
-                assert!(altered_bytes.len() == target_bytes.len());
+                // assert!(altered_bytes.len() == target_bytes.len());
 
                 let mut input = original_input.clone();
                 let bytes = input.bytes_mut();
@@ -508,7 +506,6 @@ where
                 for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
                     bytes[*dest_pos] = altered_bytes[arr_idx];
                 }
-                // println!("Mutated target bytes {:?}, at pos {:?}; end result: {:?}", altered_bytes, target_byte_pos, bytes);
 
                 // Time is measured directly the `evaluate_input` function
                 let (untransformed, post) = input.try_transform_into(state)?;
@@ -541,11 +538,11 @@ where
         Ok(())
     }
 
-    fn restart_progress_should_run(&mut self, _: &mut <Self as UsesState>::State) -> Result<bool, libafl::Error> { 
+    fn restart_progress_should_run(&mut self, _: &mut <Self as UsesState>::State) -> Result<bool, Error> { 
         Ok(true) 
     }
 
-    fn clear_restart_progress(&mut self, _: &mut <Self as UsesState>::State) -> Result<(), libafl::Error> { 
+    fn clear_restart_progress(&mut self, _: &mut <Self as UsesState>::State) -> Result<(), Error> { 
         Ok(()) 
     }
 

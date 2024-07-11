@@ -81,6 +81,7 @@ pub type StdServedShMemProvider = RcShMemProvider<ServedShMemProvider<MmapShMemP
 ))]
 pub type StdServedShMemProvider = RcShMemProvider<ServedShMemProvider<MmapShMemProvider>>;
 
+/// struct to hold descriptors to retrieve allocated ShMem if a restart occurs
 #[derive(Clone,Debug,Serialize,Deserialize)]
 pub struct ShMemMetadata {
     /// identifier for the forkserver map's shared memory

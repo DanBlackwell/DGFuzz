@@ -26,15 +26,14 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{
         scheduled::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
-        StdMOptMutator, StdScheduledMutator, Tokens,
+        StdScheduledMutator, Tokens,
     },
     observers::{CanTrack, HitcountsMapObserver, TimeObserver},
     schedulers::{
-        powersched::PowerSchedule, IndexesLenTimeMinimizerScheduler, StdWeightedScheduler,
         prescient_weighted::PrescientProbabilitySamplingScheduler,
     },
     stages::{
-        calibrate::CalibrationStage, power::StdPowerMutationalStage, StdMutationalStage,
+        calibrate::CalibrationStage, StdMutationalStage,
         TracingStage,
     },
     state::{HasCorpus, StdState},
@@ -42,8 +41,7 @@ use libafl::{
 };
 use libafl_bolts::{
     current_time,
-    os::dup2,
-    prelude::{OwnedMutSlice, ShMemDescription},
+    prelude::OwnedMutSlice,
     rands::StdRand,
     shmem::{ShMemProvider, StdShMemProvider, ShMem, ShMemMetadata},
     tuples::{tuple_list, Merge},
@@ -342,7 +340,7 @@ fn fuzz(
     // )?;
     let mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
 
-    let mutation = StdMutationalStage::with_max_iterations(mutator, 1024);
+    let mutation = StdMutationalStage::with_max_iterations(mutator, 128);
 
     let scheduler = PrescientProbabilitySamplingScheduler::new_with_backoff(backoff_factor);
 
@@ -497,7 +495,7 @@ fn fuzz(
             dfsan_labels_slice, 
             &mut shmem_provider,
             fs_input_shmem_desc,
-            1024
+            128
         );
 
         // The order of the stages matter!

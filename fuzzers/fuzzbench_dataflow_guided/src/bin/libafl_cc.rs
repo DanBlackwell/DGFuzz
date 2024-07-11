@@ -3,7 +3,7 @@ use std::env;
 use libafl_cc::{ClangWrapper, CompilerWrapper, LLVMPasses, ToolWrapper};
 
 pub fn main() {
-    let mut args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         let mut dir = env::current_exe().unwrap();
         let wrapper_name = dir.file_name().unwrap().to_str().unwrap();
