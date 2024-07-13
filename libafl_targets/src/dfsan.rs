@@ -167,7 +167,7 @@ where
         input: &E::Input,
         labels: &Vec<DFSanLabelInfo>,
         required_edges: &[usize],
-    ) -> Result<HashMap<usize, Vec<u8>>, Error>
+    ) -> Result<HashMap<u8, Vec<usize>>, Error>
     where
         E: UsesState,
         EM: EventFirer<State = E::State> + EventRestarter,
@@ -194,22 +194,25 @@ where
 
         self.executor.run_target(fuzzer, state, manager, input)?;
 
-        let mut labels_for_edge = HashMap::new();
+        let mut edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
         for &edge_num in required_edges {
             if buf[edge_num] != 0 {
                 let the_byte = buf[edge_num];
-                let mut labels = vec![];
                 for bit in 0..8 {
                     if (the_byte >> bit) & 1 == 1 {
-                        labels.push(bit + 1);
+                        let label_num = bit + 1;
+                        if let Some(edges) = edges_for_label.get_mut(&label_num) {
+                            edges.push(edge_num);
+                        } else {
+                            edges_for_label.insert(label_num, vec![edge_num]);
+                        }
                     }
                 }
-                labels_for_edge.insert(edge_num, labels);
                 buf[edge_num] = 0;
             }
         }
 
-        Ok(labels_for_edge)
+        Ok(edges_for_label)
     }
 
     fn get_bytes_depended_on_by_edges(
@@ -257,26 +260,26 @@ where
             tmp
         };
     
-        let mut queue = required_edges.iter()
-            .map(|&e| (e, 0..input.bytes().len()))
-            .collect::<Vec<(usize, Range<usize>)>>();
+        let mut queue = vec![(required_edges.to_vec(), 0..input.bytes().len())];
     
         // Collect up a list of bytes that each edge depends on; these may be disjoint 
         // e.g. if (data[0] + data[3] - data[5] == 0)
-        while let Some((edge_idx, byte_range)) = queue.pop() {
+        while let Some((required_edges, byte_range)) = queue.pop() {
             let label_infos = get_labels_for_range(byte_range);
-            let labels_for_edge = self.run_and_collect_labels(
-                fuzzer, executor, state, manager, &input, &label_infos, required_edges
+            let edges_for_label = self.run_and_collect_labels(
+                fuzzer, executor, state, manager, &input, &label_infos, &required_edges
             )?;
-            if let Some(labels) = labels_for_edge.get(&edge_idx) {
-                for &label in labels {
-                    let linfo = label_infos[(label as usize) - 1];
-                    if linfo.len == 1 {
-                        bytes_depended_on_by_edge.get_mut(&edge_idx).unwrap()
+
+            for (label, edges) in edges_for_label {
+                let linfo = label_infos[(label as usize) - 1];
+                if linfo.len == 1 {
+                    for edge_idx in edges {
+                        bytes_depended_on_by_edge
+                            .get_mut(&edge_idx).unwrap()
                             .push(linfo.start_pos);
-                    } else {
-                        queue.push((edge_idx, linfo.start_pos..(linfo.start_pos + linfo.len)));
                     }
+                } else {
+                    queue.push((edges, linfo.start_pos..(linfo.start_pos + linfo.len)));
                 }
             }
         }
