@@ -1,7 +1,7 @@
 //! dfsan logic into targets
 //! The colorization stage from `colorization()` in afl++
 use alloc::vec::Vec;
-use core::{fmt::Debug, marker::PhantomData, ops::Range};
+use core::{borrow::Borrow, fmt::Debug, marker::PhantomData, ops::Range};
 use hashbrown::HashMap;
 use std::path::PathBuf;
 use nix::sys::signal::Signal;
@@ -35,6 +35,8 @@ struct TestcaseDataflowMetadata {
     pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,
     /// Map from edge index to bytes that the conditional afterwards depends on
     pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>,
+    /// number of mutations applied to edge
+    pub mutations_tested_on_edge: HashMap<usize, usize>,
 }
 
 libafl_bolts::impl_serdeany!(TestcaseDataflowMetadata);
@@ -357,10 +359,15 @@ where
                 fuzzer, executor, state, manager, &required_edges)?;
 
             // println!("corpus_idx {:?}; bytes depended on by edge: {:?}, parents_of_direct_n {:?}", idx, bytes_depended_on_by_edge, parents_of_direct_neighbours);
+            let mutations_tested_on_edge: HashMap<usize, usize> = bytes_depended_on_by_edge
+                .keys().copied().into_iter()
+                .map(|e| (e, 0))
+                .collect();
             
             let meta = TestcaseDataflowMetadata { 
                 bytes_depended_on_by_edge, 
                 direct_neighbours_for_edge: direct_neighbours_for_edge.clone(),
+                mutations_tested_on_edge,
             };
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
             tc.add_metadata(meta);
@@ -379,10 +386,14 @@ where
             drop(tc);
         }
 
-        let direct_neighbours_for_edge = {
+        let (direct_neighbours_for_edge, num_mutations_for_edge, tc_len) = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
-            tc_meta.direct_neighbours_for_edge.clone()
+            (
+                tc_meta.direct_neighbours_for_edge.clone(), 
+                tc_meta.mutations_tested_on_edge.clone(),
+                tc.input().as_ref().unwrap().bytes().len()
+            )
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
@@ -392,6 +403,11 @@ where
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (parent, neighbours) in &direct_neighbours_for_edge {
+            // if we've already tested every possible value for this edge...
+            if df_meta.num_mutations_for_edge[parent] >= 256usize.pow(tc_len as u32) {
+                continue;
+            }
+
             let mut power = 0;
             for neighbour in neighbours {
                 if !covered_blocks.contains(neighbour) {
@@ -465,7 +481,7 @@ where
             let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
             (
                 tc.input().as_ref().unwrap().clone(),
-                tc_meta.bytes_depended_on_by_edge.clone()
+                tc_meta.bytes_depended_on_by_edge.clone(),
             )
         };
 
@@ -492,16 +508,35 @@ where
             for _ in 0..*num_mutations {
                 let mut input = target_bytes_input.clone();
 
-                start_timer!(state);
-                let mutated = mutator.mutate(state, &mut input)?;
-                mark_feature_time!(state, PerfFeature::Mutate);
+                let altered_bytes = if input.bytes().len() >= 3 {
+                    // There are a few bytes to mutate here, use the mutator
+                    start_timer!(state);
+                    let mutated = mutator.mutate(state, &mut input)?;
+                    mark_feature_time!(state, PerfFeature::Mutate);
 
-                if mutated == MutationResult::Skipped {
-                    continue;
-                }
+                    if mutated == MutationResult::Skipped {
+                        continue;
+                    }
 
-                let altered_bytes = input.bytes();
-                // assert!(altered_bytes.len() == target_bytes.len());
+                    input.bytes()
+                } else {
+                    // There are 1 or 2 bytes here - we can do an exhaustive search
+                    let bytes = input.bytes_mut();
+
+                    let mut tc = state.corpus_mut().get(idx).unwrap().borrow_mut();
+                    let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
+                    let tested_vals = tc_meta.mutations_tested_on_edge.get_mut(parent).unwrap();
+                    if *tested_vals == 256usize.pow(bytes.len() as u32) {
+                        // We've tested all combinations - bail
+                        break;
+                    }
+                    for idx in 0..bytes.len() {
+                        bytes[idx] = ((*tested_vals & 0xFF) >> (8 * idx)) as u8;
+                    }
+                    *tested_vals += 1;
+
+                    input.bytes()
+                };
 
                 let mut input = original_input.clone();
                 let bytes = input.bytes_mut();
