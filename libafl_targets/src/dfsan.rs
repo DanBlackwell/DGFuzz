@@ -13,7 +13,7 @@ use libafl_bolts::{
     rands::Rand, 
     shmem::{ShMemDescription, ShMemMetadata}, 
     tuples::{tuple_list, tuple_list_type}, 
-    AsSliceMut
+    AsSliceMut, HasLen
 };
 use serde::{Deserialize, Serialize};
 
@@ -359,9 +359,9 @@ where
                 fuzzer, executor, state, manager, &required_edges)?;
 
             // println!("corpus_idx {:?}; bytes depended on by edge: {:?}, parents_of_direct_n {:?}", idx, bytes_depended_on_by_edge, parents_of_direct_neighbours);
-            let mutations_tested_on_edge: HashMap<usize, usize> = bytes_depended_on_by_edge
-                .keys().copied().into_iter()
-                .map(|e| (e, 0))
+            let mutations_tested_on_edge: HashMap<usize, usize> = required_edges
+                .iter()
+                .map(|&e| (e, 0))
                 .collect();
             
             let meta = TestcaseDataflowMetadata { 
@@ -386,7 +386,7 @@ where
             drop(tc);
         }
 
-        let (direct_neighbours_for_edge, num_mutations_for_edge, tc_len) = {
+        let (direct_neighbours_for_edge, mutations_tested_on_edge, tc_len) = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
             (
@@ -404,7 +404,7 @@ where
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (parent, neighbours) in &direct_neighbours_for_edge {
             // if we've already tested every possible value for this edge...
-            if df_meta.num_mutations_for_edge[parent] >= 256usize.pow(tc_len as u32) {
+            if tc_len < 4 && mutations_tested_on_edge[parent] >= 256usize.pow(tc_len as u32) {
                 continue;
             }
 
@@ -527,6 +527,7 @@ where
                     let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
                     let tested_vals = tc_meta.mutations_tested_on_edge.get_mut(parent).unwrap();
                     if *tested_vals == 256usize.pow(bytes.len() as u32) {
+                        println!("Dataflow Finished all possible combos for {parent} ({tested_vals})");
                         // We've tested all combinations - bail
                         break;
                     }
@@ -550,7 +551,8 @@ where
                 let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
             
                 if result == ExecuteInputResult::Corpus {
-                    println!("Dataflow stage found a new corpus entry!");
+                    println!("Dataflow stage found a new corpus entry! (through exhaustive testing: {})",
+                        target_bytes_input.len() < 3);
                 }
 
                 start_timer!(state);
