@@ -386,14 +386,10 @@ where
             drop(tc);
         }
 
-        let (direct_neighbours_for_edge, mutations_tested_on_edge, tc_len) = {
+        let tc_meta_copy = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
-            (
-                tc_meta.direct_neighbours_for_edge.clone(), 
-                tc_meta.mutations_tested_on_edge.clone(),
-                tc.input().as_ref().unwrap().bytes().len()
-            )
+            tc_meta.clone()
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
@@ -402,9 +398,11 @@ where
         let mut max_power = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (parent, neighbours) in &direct_neighbours_for_edge {
+        for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
             // if we've already tested every possible value for this edge...
-            if tc_len < 4 && mutations_tested_on_edge[parent] >= 256usize.pow(tc_len as u32) {
+            let dependent_bytes = tc_meta_copy.bytes_depended_on_by_edge[parent].len();
+            if dependent_bytes < 4 && 
+                tc_meta_copy.mutations_tested_on_edge[parent] >= 256usize.pow(dependent_bytes as u32) {
                 continue;
             }
 
@@ -526,7 +524,7 @@ where
                     let mut tc = state.corpus_mut().get(idx).unwrap().borrow_mut();
                     let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
                     let tested_vals = tc_meta.mutations_tested_on_edge.get_mut(parent).unwrap();
-                    if *tested_vals == 256usize.pow(bytes.len() as u32) {
+                    if *tested_vals >= 256usize.pow(bytes.len() as u32) {
                         println!("Dataflow Finished all possible combos for {parent} ({tested_vals})");
                         // We've tested all combinations - bail
                         break;
@@ -565,7 +563,7 @@ where
         {
             // update the mutation counts for all the targets
             let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for (parent, neighbours) in direct_neighbours_for_edge {
+            for (parent, neighbours) in tc_meta_copy.direct_neighbours_for_edge {
                 if let Some(muts) = mutations_for_parent.get(&parent) {
                     for neighbour in &neighbours {
                         let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
