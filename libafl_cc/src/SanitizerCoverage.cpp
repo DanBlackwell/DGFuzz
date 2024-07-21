@@ -367,6 +367,7 @@ public:
   bool runOnModule(Module &M) override {
     Options.TracePCGuard = 1;
     Options.TraceCmp = 1;
+    Options.NoPrune = 1;
     Options.CoverageType = SanitizerCoverageOptions::SCK_Edge;
     Options.IndirectCalls = true;
     ModuleSanitizerCoverageCFG ModuleSancov(Options, Allowlist.get(),
@@ -403,6 +404,7 @@ PreservedAnalyses ModuleSanitizerCoverageCFG::run(Module                &M,
 
   Options.TracePCGuard = 1;
   Options.TraceCmp = 1;
+  Options.NoPrune = 1;
   Options.CoverageType = SanitizerCoverageOptions::SCK_Edge;
   Options.IndirectCalls = true;
   ModuleSanitizerCoverageCFG ModuleSancov(Options);
@@ -1134,9 +1136,9 @@ void ModuleSanitizerCoverageCFG::instrumentFunction(
             if (debug) fprintf(stderr, "Adding called function %s to %p\n", FuncName.c_str(), &BB);
             curBBinfo.calledFuncsNames.push_back(FuncName);
           } else {
-	    if (debug) fprintf(stderr, "Skipping called function %s\n", FuncName.c_str());
-	  }
-	}
+	          if (debug) fprintf(stderr, "Skipping called function %s\n", FuncName.c_str());
+	        }
+	      }
       }
       if (Options.IndirectCalls) {
         CallBase *CB = dyn_cast<CallBase>(&Inst);
