@@ -506,7 +506,7 @@ where
             for _ in 0..*num_mutations {
                 let mut input = target_bytes_input.clone();
 
-                let altered_bytes = if input.bytes().len() >= 3 {
+                let altered_bytes = if input.bytes().len() >= 6 {
                     // There are a few bytes to mutate here, use the mutator
                     start_timer!(state);
                     let mutated = mutator.mutate(state, &mut input)?;
@@ -514,6 +514,15 @@ where
 
                     if mutated == MutationResult::Skipped {
                         continue;
+                    }
+
+                    input.bytes()
+                } else if input.bytes().len() > 2 {
+                    // There are 3-5 bytes here - we can do a random search
+                    let val = state.rand_mut().next().to_be_bytes();
+                    let bytes = input.bytes_mut();
+                    for idx in 0..bytes.len() {
+                        bytes[idx] = val[idx];
                     }
 
                     input.bytes()
@@ -529,6 +538,8 @@ where
                         // We've tested all combinations - bail
                         break;
                     }
+
+
                     for idx in 0..bytes.len() {
                         bytes[idx] = ((*tested_vals & 0xFF) >> (8 * idx)) as u8;
                     }
@@ -549,8 +560,8 @@ where
                 let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
             
                 if result == ExecuteInputResult::Corpus {
-                    println!("Dataflow stage found a new corpus entry! (through exhaustive testing: {})",
-                        target_bytes_input.len() < 3);
+                    println!("Dataflow stage found a new corpus entry! (through exhaustive testing: {}, random search: {})",
+                        target_bytes_input.len() < 3, target_bytes_input.len() > 2 && target_bytes_input.len() < 6);
                 }
 
                 start_timer!(state);
