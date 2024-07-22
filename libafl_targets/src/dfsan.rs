@@ -1,7 +1,7 @@
 //! dfsan logic into targets
 //! The colorization stage from `colorization()` in afl++
 use alloc::vec::Vec;
-use core::{borrow::Borrow, fmt::Debug, marker::PhantomData, ops::Range};
+use core::{fmt::Debug, marker::PhantomData, ops::Range};
 use hashbrown::HashMap;
 use std::path::PathBuf;
 use nix::sys::signal::Signal;
@@ -401,7 +401,7 @@ where
         for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
             // if we've already tested every possible value for this edge...
             let dependent_bytes = tc_meta_copy.bytes_depended_on_by_edge[parent].len();
-            if dependent_bytes < 4 && 
+            if dependent_bytes < 3 && 
                 tc_meta_copy.mutations_tested_on_edge[parent] >= 256usize.pow(dependent_bytes as u32) {
                 continue;
             }
@@ -506,7 +506,7 @@ where
             for _ in 0..*num_mutations {
                 let mut input = target_bytes_input.clone();
 
-                let altered_bytes = if input.bytes().len() >= 6 {
+                let altered_bytes = if input.bytes().len() >= 3 {
                     // There are a few bytes to mutate here, use the mutator
                     start_timer!(state);
                     let mutated = mutator.mutate(state, &mut input)?;
@@ -514,15 +514,6 @@ where
 
                     if mutated == MutationResult::Skipped {
                         continue;
-                    }
-
-                    input.bytes()
-                } else if input.bytes().len() > 2 {
-                    // There are 3-5 bytes here - we can do a random search
-                    let val = state.rand_mut().next().to_be_bytes();
-                    let bytes = input.bytes_mut();
-                    for idx in 0..bytes.len() {
-                        bytes[idx] = val[idx];
                     }
 
                     input.bytes()
@@ -560,8 +551,8 @@ where
                 let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
             
                 if result == ExecuteInputResult::Corpus {
-                    println!("Dataflow stage found a new corpus entry! (through exhaustive testing: {}, random search: {})",
-                        target_bytes_input.len() < 3, target_bytes_input.len() > 2 && target_bytes_input.len() < 6);
+                    println!("Dataflow stage found a new corpus entry! (through exhaustive testing: {})",
+                        target_bytes_input.len() < 3);
                 }
 
                 start_timer!(state);

@@ -28,6 +28,8 @@ pub fn main() {
             .silence(true)
             // add arguments only if --libafl or --libafl-no-link are present
             .need_libafl_arg(true)
+            .add_arg("-mllvm")
+            .add_arg("-simplifycfg-branch-fold-threshold=0")
             .parse_args(&args)
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, "fuzzbench")
