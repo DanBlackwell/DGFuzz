@@ -1,6 +1,6 @@
 //! dfsan logic into targets
 //! The colorization stage from `colorization()` in afl++
-use alloc::vec::Vec;
+use alloc::{borrow::ToOwned, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Range};
 use hashbrown::HashMap;
 use std::path::PathBuf;
@@ -35,8 +35,10 @@ struct TestcaseDataflowMetadata {
     pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,
     /// Map from edge index to bytes that the conditional afterwards depends on
     pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>,
-    /// number of mutations applied to edge
-    pub mutations_tested_on_edge: HashMap<usize, usize>,
+    /// number of mutations applied to target bytes
+    pub mutations_tested_on_target_bytes: HashMap<Vec<usize>, usize>,
+    /// list of edges that depend on a certain set of bytes
+    pub edges_depending_on_bytes: HashMap<Vec<usize>, Vec<usize>>,
 }
 
 libafl_bolts::impl_serdeany!(TestcaseDataflowMetadata);
@@ -358,16 +360,22 @@ where
             let bytes_depended_on_by_edge = self.get_bytes_depended_on_by_edges(
                 fuzzer, executor, state, manager, &required_edges)?;
 
-            // println!("corpus_idx {:?}; bytes depended on by edge: {:?}, parents_of_direct_n {:?}", idx, bytes_depended_on_by_edge, parents_of_direct_neighbours);
-            let mutations_tested_on_edge: HashMap<usize, usize> = required_edges
-                .iter()
-                .map(|&e| (e, 0))
-                .collect();
-            
+            let mut mutations_tested_on_target_bytes: HashMap<Vec<usize>, usize> = HashMap::new();
+            let mut edges_depending_on_bytes: HashMap<Vec<usize>, Vec<usize>> = HashMap::new();
+            for (edge, bytes) in &bytes_depended_on_by_edge {
+                if let Some(edges) = edges_depending_on_bytes.get_mut(bytes) {
+                    edges.push(*edge);
+                } else {
+                    edges_depending_on_bytes.insert(bytes.to_owned(), vec![*edge]);
+                    mutations_tested_on_target_bytes.insert(bytes.to_owned(), 0);
+                }
+            }
+
             let meta = TestcaseDataflowMetadata { 
                 bytes_depended_on_by_edge, 
                 direct_neighbours_for_edge: direct_neighbours_for_edge.clone(),
-                mutations_tested_on_edge,
+                mutations_tested_on_target_bytes,
+                edges_depending_on_bytes
             };
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
             tc.add_metadata(meta);
@@ -393,16 +401,20 @@ where
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
-        let mut power_for_mutation_target = HashMap::new();
+        let mut power_for_mutation_target_bytes = HashMap::new();
         let mut total_muts = 0usize;
         let mut max_power = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
             // if we've already tested every possible value for this edge...
-            let dependent_bytes = tc_meta_copy.bytes_depended_on_by_edge[parent].len();
-            if dependent_bytes < 3 && 
-                tc_meta_copy.mutations_tested_on_edge[parent] >= 256usize.pow(dependent_bytes as u32) {
+            let dependent_bytes = &tc_meta_copy.bytes_depended_on_by_edge[parent];
+            if dependent_bytes.is_empty() { continue; }
+
+            if dependent_bytes.len() < 3 && 
+                tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes] >= 
+                256usize.pow(dependent_bytes.len() as u32) 
+            {
                 continue;
             }
 
@@ -413,48 +425,54 @@ where
                     power += muts;
                 }
             }
-            if power > max_power { max_power = power; }
+
+            if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
+                *bytes_power += power;
+                if *bytes_power > max_power { max_power = *bytes_power; }
+            } else {
+                power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
+                if power > max_power { max_power = power; }
+            }
+
             total_muts += power;
-            // println!("adding {power} muts for parent {parent}, total muts now {total_muts}");
-            power_for_mutation_target.insert(*parent, power);
         }
 
 
         // Calculate how much to mutate the bytes for each target edge
-        let mutations_for_parent = {
+        let mutations_for_target_bytes = {
             let mut res = HashMap::new();
             // we haven't fuzzed any of these yet! Fuzz them all the same amount
             if total_muts == 0 {
                 let muts = f64::ceil(
-                    num_mutations as f64 / power_for_mutation_target.len() as f64
+                    num_mutations as f64 / power_for_mutation_target_bytes.len() as f64
                 ) as usize;
 
-                for (edge, _) in power_for_mutation_target {
-                    res.insert(edge, muts);
+                for (target_bytes, _) in power_for_mutation_target_bytes {
+                    res.insert(target_bytes, muts);
                 }
             // Assign more mutations to underserviced edges
             } else {
-                let required_muts = power_for_mutation_target.len() * max_power - total_muts;
+                let required_muts = power_for_mutation_target_bytes.len() * max_power - total_muts;
                 // we can catch all up to the same number of mutations
                 if required_muts < num_mutations {
                     let mut available_muts = num_mutations;
                     // make sure that all edges catch up to the same value
-                    for (edge, muts) in &power_for_mutation_target {
+                    for (target_bytes, muts) in &power_for_mutation_target_bytes {
                         available_muts -= max_power - *muts;
-                        res.insert(*edge, max_power - *muts);
+                        res.insert(target_bytes.to_owned(), max_power - *muts);
                     }
                     
                     // distribute the remaining mutations fairly
                     let power = f64::ceil(
-                        available_muts as f64 / power_for_mutation_target.len() as f64
+                        available_muts as f64 / power_for_mutation_target_bytes.len() as f64
                     ) as usize;
 
-                    for (_edge, muts) in res.iter_mut() {
+                    for (_target_bytes, muts) in res.iter_mut() {
                         *muts += power;
                     }
                 } else {
                     // best effort to even out mutations
-                    for (edge, muts) in power_for_mutation_target {
+                    for (target_bytes, muts) in power_for_mutation_target_bytes {
                         // figure out how far this edge is behind proportionally
                         let to_perform = f64::ceil(
                             ((max_power - muts) as f64 / required_muts as f64)
@@ -462,7 +480,7 @@ where
                         ) as usize;
 
                         if to_perform > 0 {
-                            res.insert(edge, to_perform);
+                            res.insert(target_bytes, to_perform);
                         }
                     }
                 }
@@ -474,26 +492,20 @@ where
             havoc_mutations_fixed_length(), 6
         );
 
-        let (original_input, bytes_depended_on_by_edge) = {
+        let original_input = {
             let tc = state.corpus().get(idx).unwrap().borrow();
-            let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
-            (
-                tc.input().as_ref().unwrap().clone(),
-                tc_meta.bytes_depended_on_by_edge.clone(),
-            )
+            tc.input().as_ref().unwrap().clone()
         };
 
         // iterate through all of the edges with uncovered neighbours and test out
         // num_mutations different mutants
-        for (parent, num_mutations) in &mutations_for_parent {
-            let target_byte_pos = bytes_depended_on_by_edge.get(parent).unwrap().clone();
-
-            if target_byte_pos.is_empty() { continue; }
+        for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
+            if target_bytes_pos.is_empty() { continue; }
 
             // build a vec of the values of target bytes
             let target_bytes = {
-                let mut res = Vec::with_capacity(target_byte_pos.len());
-                for &pos in &target_byte_pos {
+                let mut res = Vec::with_capacity(target_bytes_pos.len());
+                for &pos in target_bytes_pos {
                     res.push(original_input.bytes()[pos]);
                 }
                 res
@@ -523,9 +535,9 @@ where
 
                     let mut tc = state.corpus_mut().get(idx).unwrap().borrow_mut();
                     let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
-                    let tested_vals = tc_meta.mutations_tested_on_edge.get_mut(parent).unwrap();
+                    let tested_vals = tc_meta.mutations_tested_on_target_bytes.get_mut(target_bytes_pos).unwrap();
                     if *tested_vals >= 256usize.pow(bytes.len() as u32) {
-                        println!("Dataflow Finished all possible combos for {parent} ({tested_vals})");
+                        println!("Dataflow Finished all possible combos for {:?} ({tested_vals})", *target_bytes_pos);
                         // We've tested all combinations - bail
                         break;
                     }
@@ -542,7 +554,7 @@ where
                 let mut input = original_input.clone();
                 let bytes = input.bytes_mut();
                 // replace the target bytes with the mutated byte values
-                for (arr_idx, dest_pos) in target_byte_pos.iter().enumerate() {
+                for (arr_idx, dest_pos) in target_bytes_pos.iter().enumerate() {
                     bytes[*dest_pos] = altered_bytes[arr_idx];
                 }
 
@@ -565,11 +577,12 @@ where
         {
             // update the mutation counts for all the targets
             let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for (parent, neighbours) in tc_meta_copy.direct_neighbours_for_edge {
-                if let Some(muts) = mutations_for_parent.get(&parent) {
-                    for neighbour in &neighbours {
+            for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
+                let edges = &tc_meta_copy.edges_depending_on_bytes[target_bytes_pos];
+                for edge in edges {
+                    for neighbour in &tc_meta_copy.direct_neighbours_for_edge[edge] {
                         let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
-                        *count += *muts;
+                        *count += *num_mutations;
                     }
                 }
             }
