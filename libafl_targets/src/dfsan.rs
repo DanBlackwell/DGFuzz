@@ -407,14 +407,12 @@ where
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
-            // if we've already tested every possible value for this edge...
             let dependent_bytes = &tc_meta_copy.bytes_depended_on_by_edge[parent];
             if dependent_bytes.is_empty() { continue; }
-
-            if dependent_bytes.len() < 3 && 
-                tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes] >= 
-                256usize.pow(dependent_bytes.len() as u32) 
-            {
+            let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+            // if we've already tested every possible value for this edge...
+            if (dependent_bytes.len() == 1 && muts >= 256) ||
+                (dependent_bytes.len() == 2 && muts >= 65536 + 32768) {
                 continue;
             }
 
@@ -536,15 +534,31 @@ where
                     let mut tc = state.corpus_mut().get(idx).unwrap().borrow_mut();
                     let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
                     let tested_vals = tc_meta.mutations_tested_on_target_bytes.get_mut(target_bytes_pos).unwrap();
-                    if *tested_vals >= 256usize.pow(bytes.len() as u32) {
+                    if (bytes.len() == 1 && *tested_vals >= 256) ||
+                        (bytes.len() == 2 && *tested_vals >= 65536 + 32768) {
                         println!("Dataflow Finished all possible combos for {:?} ({tested_vals})", *target_bytes_pos);
                         // We've tested all combinations - bail
                         break;
                     }
 
+                    if bytes.len() == 1 {
+                        bytes[0] = *tested_vals as u8;
+                    } else if bytes.len() == 2 {
+                        let array = if *tested_vals >= 65536 {
+                            // done alternating endianness, just whip through the rest BE
+                            ((*tested_vals - 32768) as u16).to_be_bytes()
+                        } else if *tested_vals % 2 == 0 {
+                            // test the next big-endian value
+                            ((*tested_vals / 2) as u16).to_be_bytes()
+                        } else {
+                            // test the next little-endian value
+                            ((*tested_vals / 2) as u16).to_le_bytes()
+                        };
 
-                    for idx in 0..bytes.len() {
-                        bytes[idx] = ((*tested_vals & 0xFF) >> (8 * idx)) as u8;
+                        bytes[0] = array[0]; 
+                        bytes[1] = array[1];
+                    } else {
+                        panic!("Not implemented!")
                     }
                     *tested_vals += 1;
 
