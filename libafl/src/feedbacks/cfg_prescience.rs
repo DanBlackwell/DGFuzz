@@ -55,7 +55,7 @@ pub struct ControlFlowGraphBB {
     /// basic block. Only populated lazily when required - `None` to begin with.
     neighbours_map_idxs: Option<HashSet<CoverageMapIdx>>,
     /// The name of the function that this block is in
-    function: String,
+    // function: String,
     /// Is this a dummy block (in place of missing blocks)
     dummy: bool,
 }
@@ -156,17 +156,17 @@ impl ControlFlowGraph {
                         dest_node = neighbour.0 as u64;
                     } else {
                         let dest_bb = &self.all_edges[neighbour.0 as usize];
-                        if dest_bb.function != *function { 
-                            let dest_func_id = if let Some(id) = id_for_func.get(&dest_bb.function) {
+                        if let Some(func) = &dest_bb.is_first_cov_map_block_in_function { 
+                            let dest_func_id = if let Some(id) = id_for_func.get(func) {
                                 *id
                             } else {
                                 let len = id_for_func.len();
-                                id_for_func.insert(dest_bb.function.clone(), len);
+                                id_for_func.insert(func.to_owned(), len);
                                 len
                             };
                             functions_string.push_str(&format!("  {} -> {};\n", func_id, dest_func_id));
                             cross_function = true; 
-                            let dest_func_edge_lists = &self.edges_in_func_named[&dest_bb.function];
+                            let dest_func_edge_lists = &self.edges_in_func_named[func];
                             if !edge_lists.is_empty() && !edge_lists[0].is_empty() {
                                 dest_node = self.all_edges[dest_func_edge_lists[0][0]].uuid.0;
                             } else {
@@ -211,6 +211,7 @@ impl ControlFlowGraph {
     pub fn parse_from_buf(&mut self, buf: &[u8]) {
         let mut highest_cov_map_idx = 0;
         let mut pos = 0;
+        let mut func_name_for_edge = HashMap::new();
 
         macro_rules! parse_u32_from_be_bytes {
             ($var:ident) => {
@@ -287,6 +288,7 @@ impl ControlFlowGraph {
                 }
                 println!("  }}");
 
+                func_name_for_edge.insert(CoverageMapIdx(coverage_map_idx), fname.to_owned());
                 let bb = ControlFlowGraphBB {
                     is_first_cov_map_block_in_function: if bb_index == 0 { 
                         Some(fname.clone()) 
@@ -305,7 +307,7 @@ impl ControlFlowGraph {
                     successor_cov_map_idxs: None,
                     instrumented_instructions_cov_map_idxs,
                     neighbours_map_idxs: None,
-                    function: fname.clone(),
+                    // function: fname.clone(),
                     dummy: false,
                 };
                 let index = self.all_edges.len();
@@ -364,9 +366,10 @@ impl ControlFlowGraph {
                 unstored_uuids.remove(&bb.uuid);
                 self.edge_with_uuid.insert(bb.uuid, idx as usize);
 
+                let func = &func_name_for_edge[&bb.coverage_map_idx.unwrap()];
                 // There may be multiple definitions of this function, find out which one this is
-                let edge_lists = self.edges_in_func_named.get_mut(&bb.function).unwrap();
-                if edge_lists.len() == 1 { self.confirmed_functions.insert(bb.function.clone()); }
+                let edge_lists = self.edges_in_func_named.get_mut(func).unwrap();
+                if edge_lists.len() == 1 { self.confirmed_functions.insert(func.to_owned()); }
                 let mut version = 99999;
                 for (idx, edge_list) in edge_lists.iter().enumerate() {
                     if edge_list.contains(all_edges_idx) {
@@ -375,20 +378,21 @@ impl ControlFlowGraph {
                     }
                 }
                 if version == 99999 { 
-                    panic!("couldn't find edge {all_edges_idx} (cov_idx: {idx}) in edge_lists for {} ({:?})", bb.function, edge_lists); 
+                    panic!("couldn't find edge {all_edges_idx} (cov_idx: {idx}) in edge_lists for {} ({:?})", func, edge_lists); 
                 }
 
                 let new_edge_lists = {
-                    if let Some(res) = replacement_edges_in_func_named.get_mut(&bb.function) {
+                    if let Some(res) = replacement_edges_in_func_named.get_mut(func) {
                         res
                     } else {
-                        replacement_edges_in_func_named.insert(bb.function.clone(), vec![]);
-                        replacement_edges_in_func_named.get_mut(&bb.function).unwrap()
+                        replacement_edges_in_func_named.insert(func.to_owned(), vec![]);
+                        replacement_edges_in_func_named.get_mut(func).unwrap()
                     }
                 };
                 while new_edge_lists.len() <= version {
                     new_edge_lists.push(vec![]);
                 }
+                
 
                 if bb.is_first_cov_map_block_in_function.is_some() {
                     new_edge_lists[version].insert(0, idx as usize);
@@ -410,7 +414,7 @@ impl ControlFlowGraph {
                     successor_cov_map_idxs: None,
                     instrumented_instructions_cov_map_idxs: HashSet::new(),
                     neighbours_map_idxs: None,
-                    function: "HELP I SCREWED UP!".to_string(),
+                    // function: "HELP I SCREWED UP!".to_string(),
                     dummy: true,
                 });
             }
@@ -428,9 +432,10 @@ impl ControlFlowGraph {
             let new_index = aligned_bbs.len();
             self.edge_with_uuid.insert(unstored_uuid, new_index);
 
+            let func = &func_name_for_edge[&bb.coverage_map_idx.unwrap()];
             // There may be multiple definitions of this function, find out which one this is
-            let edge_lists = self.edges_in_func_named.get_mut(&bb.function).unwrap();
-            if edge_lists.len() == 1 { self.confirmed_functions.insert(bb.function.clone()); }
+            let edge_lists = self.edges_in_func_named.get_mut(func).unwrap();
+            if edge_lists.len() == 1 { self.confirmed_functions.insert(func.to_owned()); }
             let mut version = 99999;
             for (idx, edge_list) in edge_lists.iter().enumerate() {
                 if edge_list.contains(&all_edges_idx) {
@@ -438,25 +443,22 @@ impl ControlFlowGraph {
                     break;
                 }
             }
-            if version == 99999 { panic!("couldn't find edge {all_edges_idx} in edge_lists for {}", bb.function); }
+            if version == 99999 { panic!("couldn't find edge {all_edges_idx} in edge_lists for {}", func); }
 
             let new_edge_lists = {
-                if let Some(res) = replacement_edges_in_func_named.get_mut(&bb.function) {
+                if let Some(res) = replacement_edges_in_func_named.get_mut(func) {
                     res
                 } else {
-                    replacement_edges_in_func_named.insert(bb.function.clone(), vec![]);
-                    replacement_edges_in_func_named.get_mut(&bb.function).unwrap()
+                    replacement_edges_in_func_named.insert(func.to_owned(), vec![]);
+                    replacement_edges_in_func_named.get_mut(func).unwrap()
                 }
             };
             while new_edge_lists.len() <= version {
                 new_edge_lists.push(vec![]);
             }
 
-            if bb.is_first_cov_map_block_in_function.is_some() {
-                new_edge_lists[version].insert(0, new_index);
-            } else {
-                new_edge_lists[version].push(new_index);
-            }
+            new_edge_lists[version].insert(0, new_index);
+            
 
             aligned_bbs.push(bb);
         }
@@ -529,21 +531,6 @@ impl ControlFlowGraph {
                 let mut predecessors = HashSet::new();
                 predecessors.insert(cur_uuid);
                 self.append_first_cov_map_idxs(&mut neighbours, &mut predecessors, succ_uuid);
-            }
-
-            for &neighbour in &neighbours {
-                let bb = &mut self.all_edges[neighbour.0 as usize];
-                // we need to set the neighbours for this BB to be all the other ones
-                // in case this is the target of an indirect call
-                if bb.function == *function_name && bb.neighbours_map_idxs.is_none() {
-                    let mut all_neighbours = neighbours.clone();
-                    all_neighbours.remove(&neighbour);
-                    for succ in self.neighbours_for_coverage_map_idx(neighbour) {
-                        all_neighbours.insert(*succ);
-                    }
-                    self.all_edges[neighbour.0 as usize].neighbours_map_idxs = Some(all_neighbours);
-                }
-                // self.all_edges[neighbour.0 as usize].is_first_cov_map_block_in_function = Some(function_name.to_owned());
             }
 
             self.all_edges[first_idx].neighbours_map_idxs = Some(neighbours);
@@ -648,9 +635,10 @@ impl ControlFlowGraph {
         let mut covered_funcs = HashSet::new();
         let mut index_for_func = HashMap::new();
         for idx in input_coverage_map_indexes {
-            let func = &self.all_edges[*idx].function;
-            if covered_funcs.insert(func) {
-                index_for_func.insert(func, *idx);
+            if let Some(func) = &self.all_edges[*idx].is_first_cov_map_block_in_function {
+                if covered_funcs.insert(func) {
+                    index_for_func.insert(func.to_owned(), *idx);
+                }
             }
         }
 
@@ -765,59 +753,33 @@ impl ControlFlowGraph {
                 if let Some(func) = &bb.is_first_cov_map_block_in_function {
                     let func = func.to_owned();
                     hit_functions.insert(func.clone());
-                    if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
-                        for neighbour in neighbours {
-                            if covered.insert(neighbour.0 as usize) {
-                                let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(neighbour.0 as usize);
+                }
+
+                // Can't make this assertion as we may have a basic block which contains only
+                // instrumented instructions
+                for func in bb.called_funcs.clone() {
+                    if hit_functions.insert(func.clone()) {
+                        if let Some(edges_in_func) = self.edges_in_func_named.get(&func) {
+                            if edges_in_func.is_empty() || edges_in_func[0].is_empty() {
+                                println!("No edges for func {func}");
+                                continue;
+                            }
+                            let first_edge = edges_in_func[0][0];
+                            if let Some(direct_neighbour_ancestor_index) = direct_neighbour_predecessor {
                                 reachable.push(Reachability {
-                                    index: neighbour.0 as usize, 
-                                    depth, 
+                                    index: first_edge, 
+                                    // same depth as current - as there's no conditional check required
+                                    depth: depth - 1,
                                     direct_neighbour_ancestor_index
                                 });
-                                queue.push_back((depth + 1, neighbour.0 as usize, Some(direct_neighbour_ancestor_index)));
+                                queue.push_back((depth, first_edge, Some(direct_neighbour_ancestor_index)));
                             }
                         }
                     }
                 }
             }
 
-
-            {
-                let bb = &self.all_edges[to_explore];
-
-                // Can't make this assertion as we may have a basic block which contains only
-                // instrumented instructions
-                for func in bb.called_funcs.clone() {
-                    if hit_functions.insert(func.clone()) {
-                       if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
-                           for neighbour in neighbours {
-                               if covered.insert(neighbour.0 as usize) {
-                                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(neighbour.0 as usize);
-                                    reachable.push(Reachability {
-                                        index: neighbour.0 as usize, 
-                                        depth, 
-                                        direct_neighbour_ancestor_index
-                                    });
-                                    queue.push_back((depth + 1, neighbour.0 as usize, Some(direct_neighbour_ancestor_index)));
-                               }
-                           }
-                       }
-                    }
-                }
-            }
-
             let bb = &self.all_edges[to_explore];
-
-            for instr_cov_map_idx in bb.instrumented_instructions_cov_map_idxs.clone() {
-                if covered.insert(instr_cov_map_idx.0 as usize) {
-                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(instr_cov_map_idx.0 as usize);
-                    reachable.push(Reachability {
-                        index: instr_cov_map_idx.0 as usize, 
-                        depth, 
-                        direct_neighbour_ancestor_index
-                    });
-                }
-            }
 
             for indirect_call_num in 0..bb.num_indirect_calls {
                 // create a unique ID for this indirect call based on the coverage map index
@@ -854,9 +816,10 @@ impl ControlFlowGraph {
         let mut called = HashSet::new();
 
         for &cov_idx in coverage_map_indexes {
-            if cov_idx < 4 { continue; }
             let bb = &self.all_edges[cov_idx];
-            called.insert(bb.function.clone());
+            if let Some(func) = &bb.is_first_cov_map_block_in_function {
+                called.insert(func.to_owned());
+            }
         }
 
         called
@@ -882,44 +845,10 @@ impl ControlFlowGraph {
 
             let mut children = vec![];
 
-            {
-                let bb = &self.all_edges[to_explore];
-
-                if let Some(func) = &bb.is_first_cov_map_block_in_function {
-                    let func = func.to_owned();
-                    if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
-                        for neighbour in neighbours {
-                            if covered.insert(neighbour.0 as usize) {
-                                children.push(neighbour.0 as usize)
-                            }
-                        }
-                    }
-                }
-            }
-
-            {
-                let bb = &self.all_edges[to_explore];
-
-                // Can't make this assertion as we may have a basic block which contains only
-                // instrumented instructions
-                for func in bb.called_funcs.clone() {
-                    if let Some(neighbours) = self.neighbours_for_start_of_function(&func) {
-                        for neighbour in neighbours {
-                            if covered.insert(neighbour.0 as usize) {
-                                children.push(neighbour.0 as usize)
-                            }
-                        }
-                    }
-                }
-            }
-
-            let bb = &self.all_edges[to_explore];
-
-            for instr_cov_map_idx in bb.instrumented_instructions_cov_map_idxs.clone() {
-                if covered.insert(instr_cov_map_idx.0 as usize) {
-                    children.push(instr_cov_map_idx.0 as usize);
-                }
-            }
+            // DO NOT track edges into functions - if these functions are hit,
+            // the bb will already be in `input_coverage_map_indexes`; 
+            // tracking conditionals beyond the first bb means that the child
+            // ends up with the wrong parent (it's actually grandparent) 
 
             // DO NOT add these huge index indirect calls
             // for indirect_call_num in 0..bb.num_indirect_calls {
