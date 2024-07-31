@@ -12,7 +12,7 @@ libafl_bolts::impl_serdeany!(CoverageMapIdx);
 
 /// A wrapper for u64 indicating the uuid for a basic block
 #[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
-pub struct BasicBlockUUID(u64);
+pub struct BasicBlockUUID(u32);
 libafl_bolts::impl_serdeany!(BasicBlockUUID);
 
 
@@ -153,7 +153,7 @@ impl ControlFlowGraph {
                     if neighbour.0 as usize >= self.all_edges.len() {
                         nodes_string.push_str(&format!("    {} [label=\"indirect_call\"];\n", neighbour.0));
                         cross_function = true;
-                        dest_node = neighbour.0 as u64;
+                        dest_node = neighbour.0;
                     } else {
                         let dest_bb = &self.all_edges[neighbour.0 as usize];
                         if let Some(func) = &dest_bb.is_first_cov_map_block_in_function { 
@@ -220,18 +220,18 @@ impl ControlFlowGraph {
                 pos += 4;
             };
         }
-        macro_rules! parse_ptr_from_bytes {
-            ($var:ident) => {
-                let $var = u64::from_ne_bytes(buf[pos..pos+8].try_into().unwrap());
-                // println!("parsed int {} from {pos} to {}", $var, pos + 8);
-                pos += 8;
-            };
-        }
+        // macro_rules! parse_ptr_from_bytes {
+        //     ($var:ident) => {
+        //         let $var = u64::from_ne_bytes(buf[pos..pos+8].try_into().unwrap());
+        //         // println!("parsed int {} from {pos} to {}", $var, pos + 8);
+        //         pos += 8;
+        //     };
+        // }
 
         parse_u32_from_be_bytes!(expected_indexes);
-
         parse_u32_from_be_bytes!(num_funcs);
-        println!("from buf: {:?}, Expected {expected_indexes} indexes, and {num_funcs} funcs", &buf[0..8]);
+        parse_u32_from_be_bytes!(max_uuid);
+        println!("from buf: {:?}, Expected {expected_indexes} indexes (uuids 1000000 to {max_uuid}), and {num_funcs} funcs", &buf[0..8]);
 
         for _ in 0..num_funcs {
             parse_u32_from_be_bytes!(fname_len);
@@ -244,10 +244,10 @@ impl ControlFlowGraph {
             parse_u32_from_be_bytes!(num_bbs);
             println!(", {num_bbs} basic blocks.");
             for bb_index in 0..num_bbs {
-                parse_ptr_from_bytes!(uuid);
+                parse_u32_from_be_bytes!(uuid);
                 parse_u32_from_be_bytes!(coverage_map_idx);
                 parse_u32_from_be_bytes!(num_indirect_calls);
-                println!("  Next basicblock (uuid: {uuid:x}, cov_map_idx: {coverage_map_idx}): {{\n    indirect_calls: {num_indirect_calls},");
+                println!("  Next basicblock (uuid: {uuid}, cov_map_idx: {coverage_map_idx}): {{\n    indirect_calls: {num_indirect_calls},");
 
                 let mut called_funcs = vec![];
                 parse_u32_from_be_bytes!(num_called_funcs);
@@ -268,7 +268,7 @@ impl ControlFlowGraph {
                 if num_successors > 0 {
                     print!("    successors: ");
                     for _ in 0..num_successors {
-                        parse_ptr_from_bytes!(successor_uuid);
+                        parse_u32_from_be_bytes!(successor_uuid);
                         print!(" {successor_uuid:x}");
                         successor_uuids.insert(BasicBlockUUID(successor_uuid));
                     }
@@ -547,7 +547,7 @@ impl ControlFlowGraph {
 
             for indirect_call_num in 0..bb.num_indirect_calls {
                 // create a unique ID for this indirect call based on the coverage map index
-                let idx = 1_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
+                let idx = 10_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
                 neighbours.insert(CoverageMapIdx(idx as u32));
             }
 
@@ -609,7 +609,7 @@ impl ControlFlowGraph {
 
             for indirect_call_num in 0..bb.num_indirect_calls {
                 // create a unique ID for this indirect call based on the coverage map index
-                let idx = 1_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
+                let idx = 10_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
                 covered.insert(CoverageMapIdx(idx as u32));
             }
 
@@ -742,7 +742,7 @@ impl ControlFlowGraph {
 
             debug_assert!(covered.contains(&to_explore), "to_explore: {to_explore}, covered: {:?}", covered);
 
-            if to_explore >= 1_000_000 {
+            if to_explore >= 10_000_000 {
                 // can't follow an indirect call...
                 continue;
             }
@@ -783,7 +783,7 @@ impl ControlFlowGraph {
 
             for indirect_call_num in 0..bb.num_indirect_calls {
                 // create a unique ID for this indirect call based on the coverage map index
-                let index = 1_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
+                let index = 10_000_000 + (bb.uuid.0 as usize & 0xFFFFFFFF) + indirect_call_num as usize;
                 if covered.insert(index) {
                     let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(index);
                     reachable.push(Reachability {
@@ -835,7 +835,7 @@ impl ControlFlowGraph {
         let mut neighbours_info = HashMap::new();
 
         for &to_explore in input_coverage_map_indexes {
-            if to_explore >= 1_000_000 {
+            if to_explore >= 10_000_000 {
                 // can't follow an indirect call...
                 continue;
             }
