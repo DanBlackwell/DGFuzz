@@ -122,7 +122,7 @@ impl ControlFlowGraph {
                 let bb = self.all_edges[*edge].clone();
                 let neighbours;
                 if let Some(f) = &bb.is_first_cov_map_block_in_function {
-                    assert!(pos == 0 && *f == *function);
+                    assert!(pos == 0 && *f == *function, "pos: {pos}, f: {f}, function: {function}");
                     bb_string.push_str(&format!("  subgraph cluster_{function_id} {{\n"));
                     bb_string.push_str(        &"    style=filled;\n    color=lightgrey;\n");
                     bb_string.push_str(&format!("    label=\"{}\";\n", function));
@@ -269,7 +269,7 @@ impl ControlFlowGraph {
                     print!("    successors: ");
                     for _ in 0..num_successors {
                         parse_u32_from_be_bytes!(successor_uuid);
-                        print!(" {successor_uuid:x}");
+                        print!(" {successor_uuid}");
                         successor_uuids.insert(BasicBlockUUID(successor_uuid));
                     }
                     println!("");
@@ -288,7 +288,7 @@ impl ControlFlowGraph {
                 }
                 println!("  }}");
 
-                func_name_for_edge.insert(CoverageMapIdx(coverage_map_idx), fname.to_owned());
+                func_name_for_edge.insert(BasicBlockUUID(uuid), fname.to_owned());
                 let bb = ControlFlowGraphBB {
                     is_first_cov_map_block_in_function: if bb_index == 0 { 
                         Some(fname.clone()) 
@@ -366,7 +366,7 @@ impl ControlFlowGraph {
                 unstored_uuids.remove(&bb.uuid);
                 self.edge_with_uuid.insert(bb.uuid, idx as usize);
 
-                let func = &func_name_for_edge[&bb.coverage_map_idx.unwrap()];
+                let func = &func_name_for_edge[&bb.uuid];
                 // There may be multiple definitions of this function, find out which one this is
                 let edge_lists = self.edges_in_func_named.get_mut(func).unwrap();
                 if edge_lists.len() == 1 { self.confirmed_functions.insert(func.to_owned()); }
@@ -393,7 +393,6 @@ impl ControlFlowGraph {
                     new_edge_lists.push(vec![]);
                 }
                 
-
                 if bb.is_first_cov_map_block_in_function.is_some() {
                     new_edge_lists[version].insert(0, idx as usize);
                 } else {
@@ -432,7 +431,7 @@ impl ControlFlowGraph {
             let new_index = aligned_bbs.len();
             self.edge_with_uuid.insert(unstored_uuid, new_index);
 
-            let func = &func_name_for_edge[&bb.coverage_map_idx.unwrap()];
+            let func = &func_name_for_edge[&bb.uuid];
             // There may be multiple definitions of this function, find out which one this is
             let edge_lists = self.edges_in_func_named.get_mut(func).unwrap();
             if edge_lists.len() == 1 { self.confirmed_functions.insert(func.to_owned()); }
@@ -457,8 +456,11 @@ impl ControlFlowGraph {
                 new_edge_lists.push(vec![]);
             }
 
-            new_edge_lists[version].insert(0, new_index);
-            
+            if bb.is_first_cov_map_block_in_function.is_some() {
+                new_edge_lists[version].insert(0, new_index);
+            } else {
+                new_edge_lists[version].push(new_index);
+            }
 
             aligned_bbs.push(bb);
         }
@@ -834,15 +836,10 @@ impl ControlFlowGraph {
 
         let mut neighbours_info = HashMap::new();
 
+        // set any indexes we've already covered...
+        let mut covered = all_coverage_map_indexes.clone();
+
         for &to_explore in input_coverage_map_indexes {
-            if to_explore >= 10_000_000 {
-                // can't follow an indirect call...
-                continue;
-            }
-
-            // set any indexes we've already covered...
-            let mut covered = all_coverage_map_indexes.clone();
-
             let mut children = vec![];
 
             // DO NOT track edges into functions - if these functions are hit,
@@ -853,10 +850,14 @@ impl ControlFlowGraph {
             // DO NOT add these huge index indirect calls
             // for indirect_call_num in 0..bb.num_indirect_calls {
 
-            for successor in self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned() {
-                let map_idx = successor.0 as usize;
-                if covered.insert(map_idx) {
-                    children.push(map_idx);
+            let bb = &self.all_edges[to_explore];
+            for succ_uuid in &bb.successor_uuids {
+                let succ_cov_idx = self.edge_with_uuid[succ_uuid];
+                let succ_bb = &self.all_edges[succ_cov_idx];
+                if let Some(cov_map_idx) = succ_bb.coverage_map_idx {
+                    if covered.insert(cov_map_idx.0 as usize) {
+                        children.push(cov_map_idx.0 as usize);
+                    }
                 }
             }
 

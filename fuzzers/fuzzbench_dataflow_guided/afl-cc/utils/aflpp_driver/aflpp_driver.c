@@ -65,7 +65,7 @@ extern "C" {
 #endif
 
 #include <sanitizer/dfsan_interface.h>
-extern unsigned last_edge;
+extern u32 last_edge;
 
 // AFL++ shared memory fuzz cases
 int                   __afl_sharedmem_fuzzing = 1;
@@ -77,7 +77,7 @@ extern unsigned char *__afl_area_ptr;
 extern unsigned int   __afl_map_size;
 
 // AFL++ dataflow map
-extern unsigned char *__afl_dataflow_ptr;
+extern u8 *__afl_dataflow_ptr;
 
 // libFuzzer interface is thin, so we don't include any libFuzzer headers.
 /* Using the weak attributed on LLVMFuzzerTestOneInput() breaks oss-fuzz but
