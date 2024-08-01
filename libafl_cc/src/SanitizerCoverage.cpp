@@ -54,6 +54,7 @@
 #include <sys/file.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sstream>
 
 using namespace llvm;
 
@@ -283,6 +284,8 @@ private:
                    MDNode::get(*C, None));
   }
 
+  void fetchCFGfileInfo(Module &M);
+
   std::string getSectionName(const std::string &Section) const;
   std::string getSectionStart(const std::string &Section) const;
   std::string getSectionEnd(const std::string &Section) const;
@@ -321,6 +324,7 @@ private:
   uint32_t CurrentCoverageIndex = 0; 
   uint32_t CurrentBBuuid = 1'000'000;
   std::unordered_map<std::string, std::vector<BBInfo>> bbInfosForFunctionNamed;
+  std::unordered_map<std::string, std::vector<uint32_t>> moduleNameToBBoffsets;
 };
 
 extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
@@ -676,6 +680,36 @@ void ModuleSanitizerCoverageCFG::dumpCFGtoFile(Module &M) {
       assert(0);
   }
 
+  char *module_offset_path = getenv("AFL_LLVM_MODULE_OFFSETS_FILE");
+  if (module_offset_path != NULL) {
+    std::ofstream out(module_offset_path);
+    if (!out) {
+        std::cerr << "Error opening file for writing\n";
+        return;
+    }
+
+    out << "{\n";
+    bool first = true;
+    auto map = &this->moduleNameToBBoffsets;
+    for (auto it = map->begin(); it != map->end(); ++it) {
+      if (!first) {
+          out << ",\n";
+      }
+      first = false;
+      out << "  \"" << it->first << "\": [";
+      for (size_t i = 0; i < it->second.size(); ++i) {
+        out << it->second[i];
+        if (i < it->second.size() - 1) {
+          out << ", ";
+        }
+      }
+      out << "]";
+    }
+    out << "\n}\n";
+
+    out.close();
+  }
+
   char lock_file_path[1048];
   memcpy(lock_file_path, cfg_path, strlen(cfg_path));
   memcpy(lock_file_path + strlen(cfg_path), ".lock", strlen(".lock") + 1);
@@ -683,11 +717,7 @@ void ModuleSanitizerCoverageCFG::dumpCFGtoFile(Module &M) {
   if (debug) fprintf(stderr, "Released lock on %s\n", lock_file_path);
 }
 
-bool ModuleSanitizerCoverageCFG::instrumentModule(
-    Module &M, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
-  
-  debug = getenv("AFL_DEBUG") == NULL ? 0 : 1;
-
+void ModuleSanitizerCoverageCFG::fetchCFGfileInfo(Module &M) {
   char *cfg_path = getenv("AFL_LLVM_CFG_FILE");
   if (cfg_path != NULL) {
 
@@ -745,6 +775,86 @@ bool ModuleSanitizerCoverageCFG::instrumentModule(
     if (debug) fprintf(stderr, "No CFG_FILE!\n");
   }
 
+  char *module_offset_path = getenv("AFL_LLVM_MODULE_OFFSETS_FILE");
+  if (module_offset_path != NULL) {
+    std::ifstream in(module_offset_path);
+    if (!in) {
+        std::cerr << "Error opening file for reading\n";
+        return;
+    }
+
+    auto moduleName = M.getModuleIdentifier();
+    std::string line;
+    while (std::getline(in, line)) {
+      std::string key;
+
+      std::string::size_type start = line.find('"');
+      if (start == std::string::npos) continue;
+
+      std::string::size_type end = line.find('"', start + 1);
+      if (end == std::string::npos) continue;
+
+      key = line.substr(start + 1, end - start - 1);
+
+      std::string::size_type array_start = line.find('[', end);
+      if (array_start == std::string::npos) continue;
+
+      std::string::size_type array_end = line.find(']', array_start);
+      if (array_end == std::string::npos) continue;
+
+      std::string values_str = line.substr(array_start + 1, array_end - array_start - 1);
+      std::replace(values_str.begin(), values_str.end(), ',', ' ');
+
+      std::vector<uint32_t> values;
+      uint32_t value;
+      std::istringstream iss(values_str);
+      while (iss >> value) {
+        values.push_back(value);
+      }
+
+      if (key == moduleName && !getenv("AFL_LLVM_FIRST_BUILD")) {
+        // ok, we already have offsets for this module, use those
+        if (values.size() < 2) {
+          std::cout << "Only " << values.size() << " values for " << moduleName << "\n";
+        } else {
+          CurrentCoverageIndex = values[0];
+          CurrentBBuuid = values[1];
+        }
+      }
+      this->moduleNameToBBoffsets[key] = values;
+    }
+
+    if (getenv("AFL_LLVM_FIRST_BUILD")) {
+      std::vector<uint32_t> valuesToAdd = {CurrentCoverageIndex, CurrentBBuuid};
+      auto map = &this->moduleNameToBBoffsets;
+      auto it = map->find(moduleName);
+      if (it != map->end()) {
+        // Key exists, append to the existing vector
+        for (uint32_t v: valuesToAdd) {
+          it->second.push_back(v);
+        }
+      } else {
+        // Key does not exist, create a new entry
+        (*map)[moduleName] = valuesToAdd;
+      }
+    } else {
+      auto map = &this->moduleNameToBBoffsets;
+      auto it = map->find(moduleName);
+      if (it != map->end()) {
+        // Key exists, append to the existing vector
+        it->second.erase(it->second.begin(), it->second.begin() + 2);
+      } else {
+        std::cerr << "Failed to find entry in modules file for " << moduleName << "\n";
+      }
+    }
+  }
+}
+
+bool ModuleSanitizerCoverageCFG::instrumentModule(
+    Module &M, DomTreeCallback DTCallback, PostDomTreeCallback PDTCallback) {
+  
+  debug = getenv("AFL_DEBUG") == NULL ? 0 : 1;
+  this->fetchCFGfileInfo(M);
 
   if (Options.CoverageType == SanitizerCoverageOptions::SCK_None) {
     fprintf(stderr, "Coverage level was SCK_None, bailing\n");
