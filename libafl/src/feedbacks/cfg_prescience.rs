@@ -474,7 +474,7 @@ impl ControlFlowGraph {
             for (index, edge_list) in edge_lists.iter().enumerate() {
                 let mut reachability = 0;
                 for edge in edge_list {
-                    let bb = &self.all_edges[*edge];
+                    let bb = &aligned_bbs[*edge];
                     if bb.coverage_map_idx.is_some() { reachability += 1; }
                     reachability += bb.called_funcs.len();
                     reachability += bb.num_indirect_calls as usize;
