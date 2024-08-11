@@ -83,28 +83,30 @@ pub struct CmpValuesMetadata {
     /// A `list` of values.
     #[serde(skip)]
     pub list: Vec<CmpValues>,
+    /// A `HashMap` from prev_edge_idx to list of `CmpValues`
+    pub map: HashMap<u32, Vec<CmpValues>>,
 }
 
 libafl_bolts::impl_serdeany!(CmpValuesMetadata);
 
-impl Deref for CmpValuesMetadata {
-    type Target = [CmpValues];
-    fn deref(&self) -> &[CmpValues] {
-        &self.list
-    }
-}
+// impl Deref for CmpValuesMetadata {
+//     type Target = [CmpValues];
+//     fn deref(&self) -> &[CmpValues] {
+//         &self.list
+//     }
+// }
 
-impl DerefMut for CmpValuesMetadata {
-    fn deref_mut(&mut self) -> &mut [CmpValues] {
-        &mut self.list
-    }
-}
+// impl DerefMut for CmpValuesMetadata {
+//     fn deref_mut(&mut self) -> &mut [CmpValues] {
+//         &mut self.list
+//     }
+// }
 
 impl CmpValuesMetadata {
     /// Creates a new [`struct@CmpValuesMetadata`]
     #[must_use]
     pub fn new() -> Self {
-        Self { list: vec![] }
+        Self { list: vec![], map: HashMap::new() }
     }
 }
 
@@ -121,6 +123,7 @@ where
 
     fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data) {
         self.list.clear();
+        self.map.clear();
         let count = usable_count;
         for i in 0..count {
             let execs = cmp_map.usable_executions_for(i);
@@ -164,11 +167,14 @@ where
                         continue;
                     }
                 }
+                let mut vals = vec![];
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
                         self.list.push(val);
+                        vals.push(val);
                     }
                 }
+                self.map.insert(cmp_map.prev_edge_index_for(i), vals);
             }
         }
     }
@@ -184,6 +190,9 @@ pub trait CmpMap: Debug {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Get the previous edge index for the cmp at `idx`
+    fn prev_edge_index_for(&self, idx: usize) -> usize;
 
     /// Get the number of executions for a cmp
     fn executions_for(&self, idx: usize) -> usize;

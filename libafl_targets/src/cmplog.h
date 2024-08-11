@@ -28,6 +28,7 @@
 #define CMPLOG_KIND_RTN 1
 
 typedef struct CmpLogHeader {
+  uint32_t prev_edge_idx;
   uint16_t hits;
   uint8_t  shape;
   uint8_t  kind;
@@ -98,6 +99,8 @@ extern CmpLogMapExtended *libafl_cmplog_map_extended_ptr;
 
 extern uint8_t libafl_cmplog_enabled;
 
+extern uint32_t libafl_last_seen_edge_idx;
+
 // 5 of CMPLOG inner APIs, we static inline everything
 // area_is_valid, cmplog_instructions_checked,
 // cmplog_instructions_extended_checked,
@@ -111,6 +114,7 @@ static inline void cmplog_instructions_checked(uintptr_t k, uint8_t shape,
 
   uint16_t hits;
   if (libafl_cmplog_map_ptr->headers[k].kind != CMPLOG_KIND_INS) {
+    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_ptr->headers[k].kind = CMPLOG_KIND_INS;
     libafl_cmplog_map_ptr->headers[k].hits = 1;
     libafl_cmplog_map_ptr->headers[k].shape = shape;
@@ -137,6 +141,7 @@ static inline void cmplog_instructions_extended_checked(
   // printf("%ld %ld %ld\n", k, arg1, arg2);
   uint16_t hits;
   if (libafl_cmplog_map_extended_ptr->headers[k].type != CMPLOG_KIND_INS) {
+    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_extended_ptr->headers[k].type = CMPLOG_KIND_INS;
     libafl_cmplog_map_extended_ptr->headers[k].hits = 1;
     libafl_cmplog_map_extended_ptr->headers[k].shape = shape;
@@ -170,6 +175,7 @@ static inline void cmplog_routines_checked(uintptr_t k, const uint8_t *ptr1,
   uint32_t hits;
 
   if (libafl_cmplog_map_ptr->headers[k].kind != CMPLOG_KIND_RTN) {
+    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_ptr->headers[k].kind = CMPLOG_KIND_RTN;
     libafl_cmplog_map_ptr->headers[k].hits = 1;
     libafl_cmplog_map_ptr->headers[k].shape = len;
@@ -198,6 +204,7 @@ static inline void cmplog_routines_checked_extended(uintptr_t      k,
   uint32_t hits;
   // printf("RTN: %ld %ld %ld %ld\n", k, *ptr1, *ptr2, len);
   if (libafl_cmplog_map_extended_ptr->headers[k].type != CMPLOG_KIND_RTN) {
+    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_extended_ptr->headers[k].type = CMPLOG_KIND_RTN;
     libafl_cmplog_map_extended_ptr->headers[k].hits = 1;
     libafl_cmplog_map_extended_ptr->headers[k].shape = len;

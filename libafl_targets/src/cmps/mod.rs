@@ -71,6 +71,7 @@ pub use libafl_cmplog_enabled as CMPLOG_ENABLED;
 #[repr(C)]
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CmpLogHeader {
+    prev_edge_idx: u32,
     hits: u16,
     shape: u8,
     kind: u8,
@@ -327,6 +328,10 @@ impl CmpMap for CmpLogMap {
         CMPLOG_MAP_W
     }
 
+    fn prev_edge_index_for(&self, idx: usize) -> usize {
+        self.headers[idx].prev_edge_idx as usize
+    }
+
     fn executions_for(&self, idx: usize) -> usize {
         self.headers[idx].hits as usize
     }
@@ -382,6 +387,7 @@ impl CmpMap for CmpLogMap {
     fn reset(&mut self) -> Result<(), Error> {
         // For performance, we reset just the headers
         self.headers.fill(CmpLogHeader {
+            prev_edge_idx: 0,
             hits: 0,
             shape: 0,
             kind: 0,
@@ -396,6 +402,7 @@ impl CmpMap for CmpLogMap {
 #[allow(clippy::large_stack_arrays)]
 pub static mut libafl_cmplog_map: CmpLogMap = CmpLogMap {
     headers: [CmpLogHeader {
+        prev_edge_idx: 0,
         hits: 0,
         shape: 0,
         kind: 0,
@@ -495,6 +502,10 @@ impl<'de> Deserialize<'de> for AFLppCmpLogMap {
 impl CmpMap for AFLppCmpLogMap {
     fn len(&self) -> usize {
         CMPLOG_MAP_W
+    }
+
+    fn prev_edge_index_for(&self, idx: usize) -> usize {
+        self.headers[idx].prev_edge_idx as usize
     }
 
     fn executions_for(&self, idx: usize) -> usize {

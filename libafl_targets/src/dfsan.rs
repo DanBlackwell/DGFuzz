@@ -139,7 +139,7 @@ where
         let mut fs_builder = ForkserverExecutor::builder()
             .program(dfsan_binary_path)
             .shmem_provider(shmem_provider, input_shmem_desc)
-            .debug_child(true)
+            .debug_child(false)
             // .parse_afl_cmdline(arguments)
             .coverage_map_size(map_size)
             .timeout(timeout)

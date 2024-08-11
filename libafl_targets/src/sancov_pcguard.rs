@@ -27,6 +27,9 @@ use once_cell::unsync::Lazy;
 static mut SEEN_GUARDS: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 static mut UNUSED_GUARD_INDEXES: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 
+#[no_mangle]
+static mut libafl_last_seen_edge_idx: u32 = 0;
+
 #[cfg(all(feature = "sancov_pcguard_edges", feature = "sancov_pcguard_hitcounts"))]
 #[cfg(not(any(doc, feature = "clippy")))]
 compile_error!(
@@ -217,6 +220,8 @@ extern "C" {
 #[no_mangle]
 #[allow(unused_assignments)]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
+    libafl_last_seen_edge_idx = *guard;
+
     #[allow(unused_mut)]
     let mut pos = *guard as usize;
 

@@ -436,17 +436,55 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        let cmps_len = {
+        let required_edges: Option<HashSet<usize>> = {
+            let idx = state.corpus().current().unwrap();
+            let tc = state.corpus().get(idx).unwrap().borrow();
+
+            tc.metadata::<TestcaseDataflowMetadata>()
+                .map(|meta| meta.direct_neighbours_for_edge.keys().collect())
+        };
+
+        let idx = if let Some(required_edges) = required_edges {
+            // Select cmps that only affect edge checks that we've not covered yet
             let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
                 return Ok(MutationResult::Skipped);
             };
             log::trace!("meta: {:x?}", meta);
-            if meta.list.is_empty() {
+            if meta.map.is_empty() {
                 return Ok(MutationResult::Skipped);
             }
-            meta.list.len()
+            let possible = meta.map.iter()
+                .filter(|(&&edge_idx, _cmps)| required_edges.contains(&(edge_idx as usize)))
+                .fold(0, |acc, (_, cmps)| acc + cmps.len());
+            let rand = state.rand_mut().below(possible);
+            let preferred_edge = {
+                let mut seen = 0;
+                for edge_idx, cmps in &meta.map {
+                    if seen + cmps.len() > rand {
+                        let cmp = cmps[rand - seen];
+                        for idx in 0..meta.list.len() {
+                            if meta.list[idx] == cmp {
+                                return idx;
+                            }
+                        }
+                    }
+                    seen += cmps.len();
+                }
+                panic!("tried to find index {rand} in meta.map, but only saw {seen} options");
+            };
+        } else {
+            let cmps_len = {
+                let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
+                    return Ok(MutationResult::Skipped);
+                };
+                log::trace!("meta: {:x?}", meta);
+                if meta.list.is_empty() {
+                    return Ok(MutationResult::Skipped);
+                }
+                meta.list.len()
+            };
+            state.rand_mut().below(cmps_len)
         };
-        let idx = state.rand_mut().below(cmps_len);
 
         let off = state.rand_mut().below(size);
         let len = input.bytes().len();
