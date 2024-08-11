@@ -13,35 +13,13 @@ use libafl_bolts::{
     rands::Rand, 
     shmem::{ShMemDescription, ShMemMetadata}, 
     tuples::{tuple_list, tuple_list_type}, 
-    AsSliceMut, HasLen
+    AsSliceMut, HasLen,
+    dataflow_metadata::{TestcaseDataflowMetadata, FuzzerDataflowMetadata}
 };
-use serde::{Deserialize, Serialize};
 
 use libafl::{
     common::HasMetadata, corpus::Corpus, events::{EventFirer, EventRestarter}, executors::{Executor, HasObservers}, feedbacks::{cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata}, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator, ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator, BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator, DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator, WordInterestingMutator}, prelude::{ForkserverExecutor, HasExecutions, HasSolutions, HitcountsMapObserver, StdMapObserver, TimeObserver }, stages::{mutational::{MutatedTransform, MutatedTransformPost}, Stage}, start_timer, state::{HasCorpus, HasRand, UsesState}, Error, Evaluator, ExecuteInputResult, HasObjective
 };
-
-#[derive(Clone,Debug,Serialize,Deserialize)]
-struct FuzzerDataflowMetadata {
-    /// Number of mutations tested for a given target edge (neighbour)
-    pub num_mutations_for_edge: HashMap<usize, usize>,
-}
-
-libafl_bolts::impl_serdeany!(FuzzerDataflowMetadata);
-
-#[derive(Clone,Debug,Serialize,Deserialize)]
-struct TestcaseDataflowMetadata {
-    /// Map from a covered edge to the list of direct neigbours
-    pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,
-    /// Map from edge index to bytes that the conditional afterwards depends on
-    pub bytes_depended_on_by_edge: HashMap<usize, Vec<usize>>,
-    /// number of mutations applied to target bytes
-    pub mutations_tested_on_target_bytes: HashMap<Vec<usize>, usize>,
-    /// list of edges that depend on a certain set of bytes
-    pub edges_depending_on_bytes: HashMap<Vec<usize>, Vec<usize>>,
-}
-
-libafl_bolts::impl_serdeany!(TestcaseDataflowMetadata);
 
 #[derive(Copy,Clone,Debug)]
 struct DFSanLabelInfo {

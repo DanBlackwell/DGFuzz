@@ -505,7 +505,7 @@ impl CmpMap for AFLppCmpLogMap {
     }
 
     fn prev_edge_index_for(&self, idx: usize) -> usize {
-        self.headers[idx].prev_edge_idx as usize
+        0
     }
 
     fn executions_for(&self, idx: usize) -> usize {

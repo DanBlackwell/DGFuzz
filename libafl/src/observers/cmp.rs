@@ -84,7 +84,7 @@ pub struct CmpValuesMetadata {
     #[serde(skip)]
     pub list: Vec<CmpValues>,
     /// A `HashMap` from prev_edge_idx to list of `CmpValues`
-    pub map: HashMap<u32, Vec<CmpValues>>,
+    pub map: HashMap<usize, Vec<CmpValues>>,
 }
 
 libafl_bolts::impl_serdeany!(CmpValuesMetadata);
@@ -170,7 +170,7 @@ where
                 let mut vals = vec![];
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
-                        self.list.push(val);
+                        self.list.push(val.clone());
                         vals.push(val);
                     }
                 }

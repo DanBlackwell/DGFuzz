@@ -17,13 +17,13 @@ use std::{
 };
 
 use hashbrown::HashSet;
-use libafl_bolts::{rands::Rand, AsSlice};
+use libafl_bolts::{rands::Rand, AsSlice, dataflow_metadata::TestcaseDataflowMetadata};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
 use crate::mutators::str_decode;
 use crate::{
-    corpus::{CorpusId, HasCurrentCorpusId},
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId},
     inputs::{HasMutatorBytes, UsesInput},
     mutators::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
@@ -426,7 +426,7 @@ pub struct I2SRandReplace;
 
 impl<I, S> Mutator<I, S> for I2SRandReplace
 where
-    S: UsesInput + HasMetadata + HasRand + HasMaxSize,
+    S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
     I: HasMutatorBytes,
 {
     #[allow(clippy::too_many_lines)]
@@ -440,38 +440,49 @@ where
             let idx = state.corpus().current().unwrap();
             let tc = state.corpus().get(idx).unwrap().borrow();
 
-            tc.metadata::<TestcaseDataflowMetadata>()
-                .map(|meta| meta.direct_neighbours_for_edge.keys().collect())
+            tc.metadata_map().get::<TestcaseDataflowMetadata>()
+                .map(|meta| meta.direct_neighbours_for_edge.keys().copied().collect())
         };
 
         let idx = if let Some(required_edges) = required_edges {
             // Select cmps that only affect edge checks that we've not covered yet
-            let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
-                return Ok(MutationResult::Skipped);
+            let rand = {
+                let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
+                    return Ok(MutationResult::Skipped);
+                };
+                log::trace!("meta: {:x?}", meta);
+                if meta.map.is_empty() {
+                    return Ok(MutationResult::Skipped);
+                }
+                let possible = meta.map.iter()
+                    .filter(|(&edge_idx, _cmps)| required_edges.contains(&edge_idx))
+                    .fold(0, |acc, (_, cmps)| acc + cmps.len());
+                state.rand_mut().below(possible)
             };
-            log::trace!("meta: {:x?}", meta);
-            if meta.map.is_empty() {
-                return Ok(MutationResult::Skipped);
-            }
-            let possible = meta.map.iter()
-                .filter(|(&&edge_idx, _cmps)| required_edges.contains(&(edge_idx as usize)))
-                .fold(0, |acc, (_, cmps)| acc + cmps.len());
-            let rand = state.rand_mut().below(possible);
-            let preferred_edge = {
-                let mut seen = 0;
-                for edge_idx, cmps in &meta.map {
+
+            let meta = state.metadata::<CmpValuesMetadata>().unwrap();
+            let mut seen = 0;
+            let cmpval = {
+                let mut cmp = None;
+                for (_edge_idx, cmps) in &meta.map {
                     if seen + cmps.len() > rand {
-                        let cmp = cmps[rand - seen];
-                        for idx in 0..meta.list.len() {
-                            if meta.list[idx] == cmp {
-                                return idx;
-                            }
-                        }
+                        cmp = Some(cmps[rand - seen].clone());
+                        break;
                     }
                     seen += cmps.len();
                 }
-                panic!("tried to find index {rand} in meta.map, but only saw {seen} options");
+                cmp.unwrap()
             };
+
+            let mut preferred_edge = None;
+            for idx in 0..meta.list.len() {
+                if meta.list[idx] == cmpval {
+                    preferred_edge = Some(idx);
+                    break;
+                }
+            }
+            assert_ne!(preferred_edge, None);
+            preferred_edge.unwrap()
         } else {
             let cmps_len = {
                 let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
