@@ -137,6 +137,7 @@ pub mod staterestore;
 #[cfg(any(feature = "xxh3", feature = "alloc"))]
 pub mod tuples;
 
+/// Metadata structs associated with Dataflow
 pub mod dataflow_metadata;
 
 /// The purpose of this module is to alleviate imports of the bolts by adding a glob import.

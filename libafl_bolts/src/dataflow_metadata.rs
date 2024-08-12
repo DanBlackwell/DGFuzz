@@ -3,6 +3,7 @@ use hashbrown::HashMap;
 use crate::Vec;
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
+/// Fuzzer (global) level metadata for DFSan stage
 pub struct FuzzerDataflowMetadata {
     /// Number of mutations tested for a given target edge (neighbour)
     pub num_mutations_for_edge: HashMap<usize, usize>,
@@ -11,6 +12,7 @@ pub struct FuzzerDataflowMetadata {
 crate::impl_serdeany!(FuzzerDataflowMetadata);
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
+/// Testcase level metadata for DFSan stage
 pub struct TestcaseDataflowMetadata {
     /// Map from a covered edge to the list of direct neigbours
     pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,

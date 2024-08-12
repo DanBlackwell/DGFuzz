@@ -4,7 +4,6 @@ use alloc::{borrow::Cow, vec::Vec};
 use core::{
     fmt::Debug,
     marker::PhantomData,
-    ops::{Deref, DerefMut},
 };
 
 use c2rust_bitfields::BitfieldStruct;

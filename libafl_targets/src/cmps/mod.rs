@@ -504,7 +504,7 @@ impl CmpMap for AFLppCmpLogMap {
         CMPLOG_MAP_W
     }
 
-    fn prev_edge_index_for(&self, idx: usize) -> usize {
+    fn prev_edge_index_for(&self, _idx: usize) -> usize {
         0
     }
 

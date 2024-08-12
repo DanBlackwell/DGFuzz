@@ -20,7 +20,7 @@ use libafl::{
     events::SimpleRestartingEventManager,
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or,
-    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, cfg_prescience::ControlFlowGraph},
+    feedbacks::{cfg_prescience::ControlFlowGraph, CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
@@ -29,13 +29,8 @@ use libafl::{
         StdScheduledMutator, Tokens,
     },
     observers::{CanTrack, HitcountsMapObserver, TimeObserver},
-    schedulers::{
-        prescient_weighted::PrescientProbabilitySamplingScheduler,
-    },
-    stages::{
-        calibrate::CalibrationStage, StdMutationalStage,
-        TracingStage,
-    },
+    schedulers::prescient_weighted::PrescientProbabilitySamplingScheduler,
+    stages::{calibrate::CalibrationStage, StdMutationalStage, TracingStage},
     state::{HasCorpus, StdState},
     Error, HasMetadata,
 };
@@ -43,13 +38,13 @@ use libafl_bolts::{
     current_time,
     prelude::OwnedMutSlice,
     rands::StdRand,
-    shmem::{ShMemProvider, StdShMemProvider, ShMem, ShMemMetadata},
+    shmem::{ShMem, ShMemMetadata, ShMemProvider, StdShMemProvider},
     tuples::{tuple_list, Merge},
     AsSlice,
 };
-use libafl_targets::dfsan::DataflowStage;
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use libafl_targets::autotokens;
+use libafl_targets::dfsan::DataflowStage;
 use libafl_targets::{
     libfuzzer_initialize, libfuzzer_test_one_input, std_edges_map_observer, CmpLogObserver,
 };
@@ -95,14 +90,16 @@ pub extern "C" fn libafl_main() {
             Arg::new("backoff_factor")
                 .short('b')
                 .long("backoff_factor")
-                .help("The backoff factor for each neighbour (backoff_factor ^ (num_execs / 1_000))")
-                .default_value("1.0")
+                .help(
+                    "The backoff factor for each neighbour (backoff_factor ^ (num_execs / 1_000))",
+                )
+                .default_value("1.0"),
         )
         .arg(
             Arg::new("dfsan_binary")
                 .short('d')
                 .long("dfsan_binary")
-                .help("Path of the executable compiled with DFSan")
+                .help("Path of the executable compiled with DFSan"),
         )
         .arg(
             Arg::new("logfile")
@@ -180,7 +177,8 @@ pub extern "C" fn libafl_main() {
 
     let dfsan_binary = res.get_one::<String>("dfsan_binary").map(PathBuf::from);
 
-    let backoff_factor = res.get_one::<String>("backoff_factor")
+    let backoff_factor = res
+        .get_one::<String>("backoff_factor")
         .unwrap()
         .parse::<f64>()
         .expect("Failed to parse backoff_factor");
@@ -195,8 +193,18 @@ pub extern "C" fn libafl_main() {
             .expect("Could not parse timeout in milliseconds"),
     );
 
-    fuzz(out_dir, crashes, &in_dir, tokens, cfg_file, &logfile, timeout, backoff_factor, dfsan_binary)
-        .expect("An error occurred while fuzzing");
+    fuzz(
+        out_dir,
+        crashes,
+        &in_dir,
+        tokens,
+        cfg_file,
+        &logfile,
+        timeout,
+        backoff_factor,
+        dfsan_binary,
+    )
+    .expect("An error occurred while fuzzing");
 }
 
 fn run_testcases(filenames: &[&str]) {
@@ -223,7 +231,7 @@ fn run_testcases(filenames: &[&str]) {
 }
 
 /// The actual fuzzer
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn fuzz(
     corpus_dir: PathBuf,
     objective_dir: PathBuf,
@@ -243,7 +251,7 @@ fn fuzz(
         File::from_raw_fd(new_fd)
     };
     #[cfg(unix)]
-    let file_null = File::open("/dev/null")?;
+    let _file_null = File::open("/dev/null")?;
 
     // 'While the monitor are state, they are usually used in the broker - which is likely never restarted
     let monitor = SimpleMonitor::with_user_monitor(|s| {
@@ -274,10 +282,9 @@ fn fuzz(
 
     // Create an observation channel using the coverage map
     // We don't use the hitcounts (see the Cargo.toml, we use pcguard_edges)
-    let edges_observer =
-        HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") })
-            .track_indices()
-            .track_novelties();
+    let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") })
+        .track_indices()
+        .track_novelties();
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
@@ -338,7 +345,8 @@ fn fuzz(
     //     7,
     //     5,
     // )?;
-    let mutator = StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+    let mutator =
+        StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
 
     let mutation = StdMutationalStage::with_max_iterations(mutator, 128);
 
@@ -416,7 +424,7 @@ fn fuzz(
             file.write_all(funcs_str.as_bytes()).unwrap();
 
             state.add_metadata(control_flow_graph);
-        } 
+        }
     }
 
     // In case the corpus is empty (on first run), reset
@@ -449,24 +457,26 @@ fn fuzz(
         // (we will eventually reduce the used size according to the actual map)
         const MAP_SIZE: usize = 2_621_440 / 2;
 
-        let (mut fs_map_shmem, fs_input_shmem_desc) = if let Ok(shmem_meta) = state.metadata::<ShMemMetadata>() {
-            let map_shmem = shmem_provider
-                .shmem_from_description(shmem_meta.fserver_map_description)
-                .unwrap();
-            println!("Loading shmem from metadata desc: map: {:?}, input: {:?}",
-                shmem_meta.fserver_map_description, shmem_meta.fserver_input_description);
-            (map_shmem, shmem_meta.fserver_input_description)
+        let (mut fs_map_shmem, fs_input_shmem_desc) =
+            if let Ok(shmem_meta) = state.metadata::<ShMemMetadata>() {
+                let map_shmem = shmem_provider
+                    .shmem_from_description(shmem_meta.fserver_map_description)
+                    .unwrap();
+                println!(
+                    "Loading shmem from metadata desc: map: {:?}, input: {:?}",
+                    shmem_meta.fserver_map_description, shmem_meta.fserver_input_description
+                );
+                (map_shmem, shmem_meta.fserver_input_description)
+            } else {
+                // The coverage map shared between observer and executor
+                let map_shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
+                state.add_metadata(ShMemMetadata {
+                    fserver_map_description: map_shmem.description(),
+                    fserver_input_description: None,
+                });
 
-        } else {
-            // The coverage map shared between observer and executor
-            let map_shmem = shmem_provider.new_shmem(2 * MAP_SIZE).unwrap();
-            state.add_metadata(ShMemMetadata { 
-                fserver_map_description: map_shmem.description(),
-                fserver_input_description: None
-            });
-
-            (map_shmem, None)
-        };
+                (map_shmem, None)
+            };
 
         // let the forkserver know the shmid
         fs_map_shmem.write_to_env("__AFL_SHM_ID").unwrap();
@@ -475,10 +485,13 @@ fn fuzz(
             let shmem_buf = fs_map_shmem.as_mut_ptr_of::<u8>().unwrap();
             unsafe {
                 (
-                  OwnedMutSlice::from_raw_parts_mut(shmem_buf, MAP_SIZE),
-                  // yeah, the compiler allocates a map that's 2 * MAP_SIZE, and we use map[MAP_SIZE..]
-                  // for the dfsan map
-                  OwnedMutSlice::from_raw_parts_mut(shmem_buf.offset(MAP_SIZE as isize), MAP_SIZE),
+                    OwnedMutSlice::from_raw_parts_mut(shmem_buf, MAP_SIZE),
+                    // yeah, the compiler allocates a map that's 2 * MAP_SIZE, and we use map[MAP_SIZE..]
+                    // for the dfsan map
+                    OwnedMutSlice::from_raw_parts_mut(
+                        shmem_buf.add(MAP_SIZE),
+                        MAP_SIZE,
+                    ),
                 )
             }
         };
@@ -488,21 +501,20 @@ fn fuzz(
 
         let dataflow = DataflowStage::new(
             &mut state,
-            dfsan_binary, 
-            timeout, 
-            MAP_SIZE, 
-            cov_map_slice, 
-            dfsan_labels_slice, 
+            dfsan_binary,
+            timeout,
+            MAP_SIZE,
+            cov_map_slice,
+            dfsan_labels_slice,
             &mut shmem_provider,
             fs_input_shmem_desc,
-            128
+            128,
         );
 
         // The order of the stages matter!
         let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
-
     } else {
         // The order of the stages matter!
         let mut stages = tuple_list!(calibration, tracing, i2s, mutation);
