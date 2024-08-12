@@ -1,14 +1,12 @@
 use alloc::{borrow::Cow, vec::Vec};
+use hashbrown::HashSet;
 use core::{fmt::Debug, marker::PhantomData};
 
 use libafl::{
-    executors::ExitKind,
-    inputs::UsesInput,
-    observers::{
+    executors::ExitKind, inputs::UsesInput, observers::{
         cmp::{AFLppCmpValuesMetadata, CmpMap, CmpObserver, CmpObserverMetadata, CmpValues},
         Observer,
-    },
-    Error, HasMetadata,
+    }, state::HasCorpus, Error, HasMetadata
 };
 use libafl_bolts::{ownedref::OwnedRefMut, Named};
 use serde::{Deserialize, Serialize};
@@ -77,7 +75,7 @@ pub struct AFLppCmpLogObserver<'a, S> {
 impl<'a, S> CmpObserver<'a, AFLppCmpLogMap, S, AFLppCmpValuesMetadata>
     for AFLppCmpLogObserver<'a, S>
 where
-    S: UsesInput + HasMetadata,
+    S: UsesInput + HasMetadata + HasCorpus,
 {
     /// Get the number of usable cmps (all by default)
     fn usable_count(&self) -> usize {
@@ -133,13 +131,13 @@ where
         let usable_count = self.usable_count();
         let cmp_observer_data = self.cmp_observer_data();
 
-        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data);
+        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data, None);
     }
 }
 
 impl<'a, S> Observer<S> for AFLppCmpLogObserver<'a, S>
 where
-    S: UsesInput + HasMetadata,
+    S: UsesInput + HasMetadata + HasCorpus,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         #[cfg(feature = "cmplog_extended_instrumentation")]
@@ -233,6 +231,7 @@ impl<'a> CmpObserverMetadata<'a, AFLppCmpLogMap> for AFLppCmpValuesMetadata {
         usable_count: usize,
         cmp_map: &mut AFLppCmpLogMap,
         cmp_observer_data: Self::Data,
+        _: Option<HashSet<usize>>
     ) {
         let count = usable_count;
         for i in 0..count {

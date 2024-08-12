@@ -430,77 +430,96 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        let required_edges: Option<HashSet<usize>> = {
-            let idx = state.corpus().current().unwrap();
-            let tc = state.corpus().get(idx).unwrap().borrow();
+        // let required_edges: Option<HashSet<usize>> = {
+        //     let idx = state.corpus().current().unwrap();
+        //     let tc = state.corpus().get(idx).unwrap().borrow();
 
-            let full_neighbours_meta = state
-                .metadata::<MapNeighboursFeedbackMetadata>()
-                .unwrap();
-            let covered_blocks = &full_neighbours_meta.covered_blocks;
+        //     let full_neighbours_meta = state
+        //         .metadata::<MapNeighboursFeedbackMetadata>()
+        //         .unwrap();
+        //     let covered_blocks = &full_neighbours_meta.covered_blocks;
 
-            tc.metadata_map().get::<TestcaseDataflowMetadata>()
-                .map(|meta| {
-                    meta.direct_neighbours_for_edge
-                        .iter()
-                        .filter(|(_parent, neighbours)| {
-                            for neighbour in *neighbours {
-                                if !covered_blocks.contains(neighbour) {
-                                    return true;
-                                }
-                            }
-                            false
-                        })
-                        .map(|(parent, _)| *parent)
-                        .collect()
-                })
-        };
+        //     tc.metadata_map().get::<TestcaseDataflowMetadata>()
+        //         .map(|meta| {
+        //             let mut res: HashSet<usize> = meta.direct_neighbours_for_edge
+        //                 .iter()
+        //                 .filter(|(_parent, neighbours)| {
+        //                     for neighbour in *neighbours {
+        //                         if !covered_blocks.contains(neighbour) {
+        //                             return true;
+        //                         }
+        //                     }
+        //                     false
+        //                 })
+        //                 .map(|(parent, _)| *parent)
+        //                 .collect();
+        //             res.insert(0);
+        //             res
+        //         })
+        // };
 
-        let idx = if let Some(required_edges) = required_edges {
-            // Select cmps that only affect edge checks that we've not covered yet
-            let rand = {
-                let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
-                    return Ok(MutationResult::Skipped);
-                };
-                log::trace!("meta: {:x?}", meta);
-                if meta.map.is_empty() {
-                    return Ok(MutationResult::Skipped);
-                }
-                let possible = meta.map.iter()
-                    .filter(|(&edge_idx, _cmps)| required_edges.contains(&edge_idx))
-                    .fold(0, |acc, (_, cmps)| acc + cmps.len());
-                state.rand_mut().below(possible)
-            };
 
-            let meta = state.metadata::<CmpValuesMetadata>().unwrap();
-            let mut seen = 0;
-            let cmpval = {
-                let mut cmp = None;
-                for (_edge_idx, cmps) in &meta.map {
-                    if seen + cmps.len() > rand {
-                        cmp = Some(cmps[rand - seen].clone());
-                        break;
-                    }
-                    seen += cmps.len();
-                }
-                cmp.unwrap()
-            };
+        // let idx = if let Some(required_edges) = required_edges {
+        //     println!("required edges: {:?}", required_edges);
+        //     // Select cmps that only affect edge checks that we've not covered yet
+        //     let rand = {
+        //         let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
+        //             return Ok(MutationResult::Skipped);
+        //         };
+        //         log::trace!("meta: {:x?}", meta);
+        //         if meta.map.is_empty() {
+        //             return Ok(MutationResult::Skipped);
+        //         }
+        //         println!("CmpValuesMetadata edges: {:?}", meta.map.keys().copied().collect::<Vec<usize>>());
+        //         println!("CmpValuesMetadata: {:?}", meta.map);
+        //         let possible = meta.map.iter()
+        //             .filter(|(&edge_idx, _cmps)| required_edges.contains(&edge_idx))
+        //             .fold(0, |acc, (_, cmps)| acc + cmps.len());
 
-            let mut preferred_edge = None;
-            for idx in 0..meta.list.len() {
-                if meta.list[idx] == cmpval {
-                    preferred_edge = Some(idx);
-                    break;
-                }
-            }
+        //         if possible == 0 {
+        //             return Ok(MutationResult::Skipped);
+        //         }
+        //         print!("  had {possible} possible choices");
+        //         state.rand_mut().below(possible)
+        //     };
+        //     println!(", chose index {rand}");
 
-            if preferred_edge.is_none() {
-                println!("preferred_edge (cmplog) is None (looking for {:?})", cmpval);
-                return Ok(MutationResult::Skipped);
-            }
+        //     let meta = state.metadata::<CmpValuesMetadata>().unwrap();
+        //     let mut seen = 0;
+        //     let cmpval = {
+        //         let mut cmp = None;
+        //         let possible = meta.map.iter()
+        //             .filter(|(&edge_idx, _cmps)| required_edges.contains(&edge_idx));
+        //         for (_edge_idx, cmps) in possible {
+        //             if seen + cmps.len() > rand {
+        //                 cmp = Some(cmps[rand - seen].clone());
+        //                 break;
+        //             }
+        //             seen += cmps.len();
+        //         }
+        //         cmp.unwrap()
+        //     };
 
-            preferred_edge.unwrap()
-        } else {
+        //     print!(", cmp: {:?}", cmpval);
+
+        //     let mut preferred_edge = None;
+        //     for idx in 0..meta.list.len() {
+        //         if meta.list[idx] == cmpval {
+        //             preferred_edge = Some(idx);
+        //             break;
+        //         }
+        //     }
+
+        //     println!(", found at idx {:?}", preferred_edge);
+
+        //     if preferred_edge.is_none() {
+        //         println!("preferred_edge (cmplog) is None (looking for {:?})", cmpval);
+        //         return Ok(MutationResult::Skipped);
+        //     }
+
+        //     preferred_edge.unwrap()
+        // } else {
+        let idx = {
             let cmps_len = {
                 let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
                     return Ok(MutationResult::Skipped);

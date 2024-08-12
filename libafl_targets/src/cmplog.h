@@ -114,7 +114,6 @@ static inline void cmplog_instructions_checked(uintptr_t k, uint8_t shape,
 
   uint16_t hits;
   if (libafl_cmplog_map_ptr->headers[k].kind != CMPLOG_KIND_INS) {
-    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_ptr->headers[k].kind = CMPLOG_KIND_INS;
     libafl_cmplog_map_ptr->headers[k].hits = 1;
     libafl_cmplog_map_ptr->headers[k].shape = shape;
@@ -125,6 +124,7 @@ static inline void cmplog_instructions_checked(uintptr_t k, uint8_t shape,
       libafl_cmplog_map_ptr->headers[k].shape = shape;
     }
   }
+  libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
 
   hits &= CMPLOG_MAP_H - 1;
   libafl_cmplog_map_ptr->vals.operands[k][hits].v0 = arg1;
@@ -141,7 +141,6 @@ static inline void cmplog_instructions_extended_checked(
   // printf("%ld %ld %ld\n", k, arg1, arg2);
   uint16_t hits;
   if (libafl_cmplog_map_extended_ptr->headers[k].type != CMPLOG_KIND_INS) {
-    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_extended_ptr->headers[k].type = CMPLOG_KIND_INS;
     libafl_cmplog_map_extended_ptr->headers[k].hits = 1;
     libafl_cmplog_map_extended_ptr->headers[k].shape = shape;
@@ -152,6 +151,7 @@ static inline void cmplog_instructions_extended_checked(
       libafl_cmplog_map_extended_ptr->headers[k].shape = shape;
     }
   }
+  libafl_cmplog_map_extended_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
 
   hits &= CMPLOG_MAP_H - 1;
   libafl_cmplog_map_extended_ptr->vals.operands[k][hits].v0 = arg1;
@@ -175,7 +175,6 @@ static inline void cmplog_routines_checked(uintptr_t k, const uint8_t *ptr1,
   uint32_t hits;
 
   if (libafl_cmplog_map_ptr->headers[k].kind != CMPLOG_KIND_RTN) {
-    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_ptr->headers[k].kind = CMPLOG_KIND_RTN;
     libafl_cmplog_map_ptr->headers[k].hits = 1;
     libafl_cmplog_map_ptr->headers[k].shape = len;
@@ -187,6 +186,7 @@ static inline void cmplog_routines_checked(uintptr_t k, const uint8_t *ptr1,
           len;  // TODO; adjust len for AFL++'s cmplog protocol
     }
   }
+  libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
 
   hits &= CMPLOG_MAP_RTN_H - 1;
   MEMCPY(libafl_cmplog_map_ptr->vals.routines[k][hits].v0, ptr1, len);
@@ -204,7 +204,6 @@ static inline void cmplog_routines_checked_extended(uintptr_t      k,
   uint32_t hits;
   // printf("RTN: %ld %ld %ld %ld\n", k, *ptr1, *ptr2, len);
   if (libafl_cmplog_map_extended_ptr->headers[k].type != CMPLOG_KIND_RTN) {
-    libafl_cmplog_map_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
     libafl_cmplog_map_extended_ptr->headers[k].type = CMPLOG_KIND_RTN;
     libafl_cmplog_map_extended_ptr->headers[k].hits = 1;
     libafl_cmplog_map_extended_ptr->headers[k].shape = len;
@@ -216,6 +215,7 @@ static inline void cmplog_routines_checked_extended(uintptr_t      k,
           len;  // TODO; adjust len for AFL++'s cmplog protocol
     }
   }
+  libafl_cmplog_map_extended_ptr->headers[k].prev_edge_idx = libafl_last_seen_edge_idx;
 
   hits &= CMPLOG_MAP_RTN_H - 1;
   libafl_cmplog_map_extended_ptr->vals.routines[k][hits].v0_len = len;

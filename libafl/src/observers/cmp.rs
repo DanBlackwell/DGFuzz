@@ -8,11 +8,11 @@ use core::{
 };
 
 use c2rust_bitfields::BitfieldStruct;
-use hashbrown::HashMap;
-use libafl_bolts::{ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
+use hashbrown::{HashMap, HashSet};
+use libafl_bolts::{dataflow_metadata::TestcaseDataflowMetadata, ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{executors::ExitKind, inputs::UsesInput, observers::Observer, Error, HasMetadata};
+use crate::{corpus::Corpus, executors::ExitKind, inputs::UsesInput, observers::Observer, prelude::MapNeighboursFeedbackMetadata, state::HasCorpus, Error, HasMetadata};
 
 /// Generic metadata trait for use in a `CmpObserver`, which adds comparisons from a `CmpObserver`
 /// primarily intended for use with `AFLppCmpValuesMetadata` or `CmpValuesMetadata`
@@ -32,7 +32,7 @@ where
     /// Add comparisons to a metadata from a `CmpObserver`. `cmp_map` is mutable in case
     /// it is needed for a custom map, but this is not utilized for `CmpObserver` or
     /// `AFLppCmpLogObserver`.
-    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, cmp_observer_data: Self::Data);
+    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, cmp_observer_data: Self::Data, unseen_edge_parents: Option<HashSet<usize>>);
 }
 
 /// Compare values collected during a run
@@ -122,7 +122,7 @@ where
         Self::new()
     }
 
-    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data) {
+    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data, unseen_edge_parents: Option<HashSet<usize>>) {
         self.list.clear();
         self.map.clear();
         let count = usable_count;
@@ -168,14 +168,28 @@ where
                         continue;
                     }
                 }
-                let mut vals = vec![];
+
+                // if we have a list of parents of unseen edges, and prev_edge isn't one of them,
+                // don't store these Cmps
+                if unseen_edge_parents.as_ref().is_some_and(|e| {
+                    !e.contains(&cmp_map.prev_edge_index_for(i))
+                }) {
+                    continue;
+                }
+
+                if !self.map.contains_key(&cmp_map.prev_edge_index_for(i)) {
+                    self.map.insert(cmp_map.prev_edge_index_for(i), vec![]);
+                }
+                let vals = self.map
+                    .get_mut(&cmp_map.prev_edge_index_for(i))
+                    .unwrap();
+
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
                         self.list.push(val.clone());
                         vals.push(val);
                     }
                 }
-                self.map.insert(cmp_map.prev_edge_index_for(i), vals);
             }
         }
     }
@@ -233,15 +247,43 @@ where
     /// This routine does a basic loop filtering because loop index cmps are not interesting.
     fn add_cmpvalues_meta(&mut self, state: &mut S)
     where
-        S: HasMetadata,
+        S: HasMetadata + HasCorpus,
     {
+        let unseen_edge_parents = state
+                .metadata_map()
+                .get::<MapNeighboursFeedbackMetadata>()
+                .map(|full_neighbours_meta| {
+            let covered_blocks = &full_neighbours_meta.covered_blocks;
+
+            let idx = state.corpus().current().unwrap();
+            let tc = state.corpus().get(idx).unwrap().borrow();
+
+            tc.metadata_map().get::<TestcaseDataflowMetadata>()
+                .map(|meta| {
+                    let res: HashSet<usize> = meta.direct_neighbours_for_edge
+                        .iter()
+                        .filter(|(_parent, neighbours)| {
+                            for neighbour in *neighbours {
+                                if !covered_blocks.contains(neighbour) {
+                                    return true;
+                                }
+                            }
+                            false
+                        })
+                        .map(|(parent, _)| *parent)
+                        .collect();
+                    res
+                })
+        });
+        let unseen_edge_parents = unseen_edge_parents.unwrap_or(None);
+
         #[allow(clippy::option_if_let_else)] // we can't mutate state in a closure
         let meta = state.metadata_or_insert_with(|| M::new_metadata());
 
         let usable_count = self.usable_count();
         let cmp_observer_data = self.cmp_observer_data();
 
-        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data);
+        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data, unseen_edge_parents);
     }
 }
 
@@ -251,7 +293,7 @@ where
 pub struct StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize,
-    S: UsesInput + HasMetadata,
+    S: UsesInput + HasMetadata + HasCorpus,
     M: CmpObserverMetadata<'a, CM>,
 {
     cmp_map: OwnedRefMut<'a, CM>,
@@ -265,7 +307,7 @@ where
 impl<'a, CM, S, M> CmpObserver<'a, CM, S, M> for StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
-    S: UsesInput + Debug + HasMetadata,
+    S: UsesInput + Debug + HasMetadata + HasCorpus,
     M: CmpObserverMetadata<'a, CM>,
 {
     /// Get the number of usable cmps (all by default)
@@ -292,7 +334,7 @@ where
 impl<'a, CM, S, M> Observer<S> for StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
-    S: UsesInput + Debug + HasMetadata,
+    S: UsesInput + Debug + HasMetadata + HasCorpus,
     M: CmpObserverMetadata<'a, CM>,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
@@ -316,7 +358,7 @@ where
 impl<'a, CM, S, M> Named for StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
-    S: UsesInput + HasMetadata,
+    S: UsesInput + HasMetadata + HasCorpus,
     M: CmpObserverMetadata<'a, CM>,
 {
     fn name(&self) -> &Cow<'static, str> {
@@ -327,7 +369,7 @@ where
 impl<'a, CM, S, M> StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
-    S: UsesInput + HasMetadata,
+    S: UsesInput + HasMetadata + HasCorpus,
     M: CmpObserverMetadata<'a, CM>,
 {
     /// Creates a new [`StdCmpObserver`] with the given name and map.
