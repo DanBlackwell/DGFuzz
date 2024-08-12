@@ -481,7 +481,12 @@ where
                     break;
                 }
             }
-            assert_ne!(preferred_edge, None);
+
+            if preferred_edge.is_none() {
+                println!("preferred_edge (cmplog) is None (looking for {:?})", cmpval);
+                return Ok(MutationResult::Skipped);
+            }
+
             preferred_edge.unwrap()
         } else {
             let cmps_len = {

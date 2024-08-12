@@ -75,15 +75,16 @@ impl CmpValues {
 
 /// A state metadata holding a list of values logged from comparisons
 #[derive(Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(
-    any(not(feature = "serdeany_autoreg"), miri),
-    allow(clippy::unsafe_derive_deserialize)
-)] // for SerdeAny
+// #[cfg_attr(
+//     any(not(feature = "serdeany_autoreg"), miri),
+//     allow(clippy::unsafe_derive_deserialize)
+// )] // for SerdeAny
 pub struct CmpValuesMetadata {
     /// A `list` of values.
-    #[serde(skip)]
+    // #[serde(skip)]
     pub list: Vec<CmpValues>,
     /// A `HashMap` from prev_edge_idx to list of `CmpValues`
+    // #[serde(skip)]
     pub map: HashMap<usize, Vec<CmpValues>>,
 }
 
