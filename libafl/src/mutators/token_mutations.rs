@@ -23,15 +23,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
 use crate::mutators::str_decode;
 use crate::{
-    corpus::{Corpus, CorpusId, HasCurrentCorpusId},
-    inputs::{HasMutatorBytes, UsesInput},
-    mutators::{
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId}, inputs::{HasMutatorBytes, UsesInput}, mutators::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
-    },
-    observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata},
-    stages::TaintMetadata,
-    state::{HasCorpus, HasMaxSize, HasRand},
-    Error, HasMetadata,
+    }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata}, prelude::MapNeighboursFeedbackMetadata, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
 };
 
 /// A state metadata holding a list of tokens
@@ -440,8 +434,26 @@ where
             let idx = state.corpus().current().unwrap();
             let tc = state.corpus().get(idx).unwrap().borrow();
 
+            let full_neighbours_meta = state
+                .metadata::<MapNeighboursFeedbackMetadata>()
+                .unwrap();
+            let covered_blocks = &full_neighbours_meta.covered_blocks;
+
             tc.metadata_map().get::<TestcaseDataflowMetadata>()
-                .map(|meta| meta.direct_neighbours_for_edge.keys().copied().collect())
+                .map(|meta| {
+                    meta.direct_neighbours_for_edge
+                        .iter()
+                        .filter(|(_parent, neighbours)| {
+                            for neighbour in *neighbours {
+                                if !covered_blocks.contains(neighbour) {
+                                    return true;
+                                }
+                            }
+                            false
+                        })
+                        .map(|(parent, _)| *parent)
+                        .collect()
+                })
         };
 
         let idx = if let Some(required_edges) = required_edges {
