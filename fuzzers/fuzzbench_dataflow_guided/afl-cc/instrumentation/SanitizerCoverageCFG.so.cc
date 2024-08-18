@@ -283,7 +283,11 @@ private:
 
   void SetNoSanitizeMetadata(Instruction *I) {
     I->setMetadata(I->getModule()->getMDKindID("nosanitize"),
+  #if LLVM_VERSION_MAJOR <= 15
+                   MDNode::get(*C, None));
+  #else
                    MDNode::get(*C, std::nullopt));
+  #endif
   }
 
   void fetchCFGfileInfo(Module &M);
