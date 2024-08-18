@@ -281,7 +281,7 @@ private:
 
   void SetNoSanitizeMetadata(Instruction *I) {
     I->setMetadata(I->getModule()->getMDKindID("nosanitize"),
-                   MDNode::get(*C, None));
+                   MDNode::get(*C, std::nullopt));
   }
 
   void fetchCFGfileInfo(Module &M);
@@ -337,11 +337,11 @@ llvmGetPassPluginInfo() {
 #if LLVM_VERSION_MAJOR <= 13
             using OptimizationLevel = typename PassBuilder::OptimizationLevel;
 #endif
-#if LLVM_VERSION_MAJOR >= 16
-            PB.registerFullLinkTimeOptimizationLastEPCallback(
-#else
+// #if LLVM_VERSION_MAJOR >= 16
+//             PB.registerFullLinkTimeOptimizationLastEPCallback(
+// #else
             PB.registerOptimizerLastEPCallback(
-#endif
+// #endif
                 [](ModulePassManager &MPM, OptimizationLevel OL) {
 
                   MPM.addPass(ModuleSanitizerCoverageCFG());

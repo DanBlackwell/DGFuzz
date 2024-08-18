@@ -157,6 +157,8 @@ where
         E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasMutatorBytes,
     {
+        self.executor.run_target(fuzzer, state, manager, input)?;
+
         let buf = self.dfsan_labels_map.as_slice_mut();
         buf[0] = labels.len() as u8;
         let mut pos = 1;
@@ -175,6 +177,22 @@ where
         }
 
         self.executor.run_target(fuzzer, state, manager, input)?;
+
+        // let mut all_edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
+        // for edge_num in 0..31 {
+        //         let the_byte = buf[edge_num];
+        //         for bit in 0..8 {
+        //             if (the_byte >> bit) & 1 == 1 {
+        //                 let label_num = bit + 1;
+        //                 if let Some(edges) = all_edges_for_label.get_mut(&label_num) {
+        //                     edges.push(edge_num);
+        //                 } else {
+        //                     all_edges_for_label.insert(label_num, vec![edge_num]);
+        //                 }
+        //             }
+        //         }
+        // }
+        // println!("labels: {:?}, all_edges_for_label: {:?}", labels, all_edges_for_label);
 
         let mut edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
         for &edge_num in required_edges {
@@ -243,6 +261,7 @@ where
         };
     
         let mut queue = vec![(required_edges.to_vec(), 0..input.bytes().len())];
+        // println!("input len: {:?}", input.bytes().len());
     
         // Collect up a list of bytes that each edge depends on; these may be disjoint 
         // e.g. if (data[0] + data[3] - data[5] == 0)
@@ -252,6 +271,7 @@ where
                 fuzzer, executor, state, manager, &input, &label_infos, &required_edges
             )?;
 
+            // println!("edges_for_label: {:?}", edges_for_label);
             for (label, edges) in edges_for_label {
                 let linfo = label_infos[(label as usize) - 1];
                 if linfo.len == 1 {
@@ -261,6 +281,7 @@ where
                             .push(linfo.start_pos);
                     }
                 } else {
+                    // println!("queueing edges {:?}, {:?}-{:?}", edges, linfo.start_pos, linfo.start_pos + linfo.len);
                     queue.push((edges, linfo.start_pos..(linfo.start_pos + linfo.len)));
                 }
             }
@@ -333,6 +354,9 @@ where
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
                 cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &covered_blocks)
             };
+            // let mut sorted_all = covered_blocks.clone().into_iter().collect::<Vec<usize>>();
+            // sorted_all.sort();
+            // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
 
             let required_edges: Vec<usize> = direct_neighbours_for_edge.keys().copied().collect();
             let bytes_depended_on_by_edge = self.get_bytes_depended_on_by_edges(

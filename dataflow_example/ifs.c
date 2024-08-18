@@ -1,22 +1,25 @@
+#include <string.h>
 
 int inner_ifs(char in) {
-    if (in > 5) {
+    if (in > 125) {
         return 1;
     }
     return 0;
 }
 
-int ifs(char *buf, int len) {
+int ifs(char *buf) {
     int res = 0;
 
-    if (len > 1 && buf[0] != buf[1]) {
-        if (len > 2 && (buf[0] & buf[2]) == 0) {
+    if (buf[0] == buf[1]) {
+        if ((buf[2] & buf[3]) == 0x3) {
             res = 4;
-        } else if (buf[1] > 64) {
-            if (len > 6 && *(int *)(&buf[2]) > 999) {
+        } else if (buf[4] < -120) {
+            if (*(int *)(&buf[5]) > 100000) {
                 res = 6;
+            } else if (memcmp(&buf[3], &buf[6], 3) == 0) {
+                res = inner_ifs(buf[10]);
             } else {
-                res = inner_ifs(buf[0]);
+                res = 8;
             }
         }
     }
