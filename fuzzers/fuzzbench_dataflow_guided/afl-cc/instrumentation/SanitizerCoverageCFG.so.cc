@@ -283,7 +283,7 @@ private:
 
   void SetNoSanitizeMetadata(Instruction *I) {
     I->setMetadata(I->getModule()->getMDKindID("nosanitize"),
-                   MDNode::get(*C, None));
+                   MDNode::get(*C, std::nullopt));
   }
 
   void fetchCFGfileInfo(Module &M);
@@ -339,11 +339,11 @@ llvmGetPassPluginInfo() {
 #if LLVM_VERSION_MAJOR <= 13
             using OptimizationLevel = typename PassBuilder::OptimizationLevel;
 #endif
-#if LLVM_VERSION_MAJOR >= 16
-            PB.registerFullLinkTimeOptimizationLastEPCallback(
-#else
+// #if LLVM_VERSION_MAJOR >= 16
+//             PB.registerFullLinkTimeOptimizationLastEPCallback(
+// #else
             PB.registerOptimizerLastEPCallback(
-#endif
+// #endif
                 [](ModulePassManager &MPM, OptimizationLevel OL) {
 
                   MPM.addPass(ModuleSanitizerCoverageCFG());
@@ -737,7 +737,7 @@ void ModuleSanitizerCoverageCFG::fetchCFGfileInfo(Module &M) {
     // Open the binary file for reading in binary mode
     std::ifstream file(cfg_path, std::ios::binary);
 
-    uint32_t coverage_index_offset = 0, initial_function_count = 0;
+    uint32_t initial_function_count = 0;
     if (file.is_open()) {
       std::streampos fsize = file.tellg();
       file.seekg(0, std::ios::end);
@@ -785,7 +785,7 @@ void ModuleSanitizerCoverageCFG::fetchCFGfileInfo(Module &M) {
         return;
     }
 
-    auto moduleName = M.getModuleIdentifier();
+    std::string moduleName = M.getModuleIdentifier();
     std::string line;
     while (std::getline(in, line)) {
       std::string key;

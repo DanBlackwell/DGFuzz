@@ -8,7 +8,7 @@ fn nightly() {
 #[rustversion::not(nightly)]
 fn nightly() {
     assert!(
-        cfg!(all(not(docrs), not(feature = "nautilus"))),
+        cfg!(all(not(docsrs), not(feature = "nautilus"))),
         "The 'nautilus' feature of libafl requires a nightly compiler"
     );
 }
