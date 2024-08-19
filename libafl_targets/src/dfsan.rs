@@ -497,10 +497,11 @@ where
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
-            let dependent_bytes = &tc_meta_copy.bytes_depended_on_by_edge[parent];
-            if dependent_bytes.is_empty() {
+            let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_edge.get(parent) else {
                 continue;
-            }
+            };
+            if dependent_bytes.is_empty() { continue; }
+
             let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
             // if we've already tested every possible value for this edge...
             if (dependent_bytes.len() == 1 && muts >= 256)
