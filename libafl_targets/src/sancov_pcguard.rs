@@ -22,8 +22,8 @@ use crate::EDGES_MAP_SIZE_IN_USE;
 #[cfg(feature = "pointer_maps")]
 use crate::{coverage::EDGES_MAP_PTR, EDGES_MAP_SIZE_MAX};
 
-use std::collections::HashSet;
 use once_cell::unsync::Lazy;
+use std::collections::HashSet;
 static mut SEEN_GUARDS: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 static mut UNUSED_GUARD_INDEXES: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
 
@@ -270,7 +270,8 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
         EDGES_MAP_PTR = EDGES_MAP.as_mut_ptr();
     }
 
-    if start == stop { //|| *start != 0 {
+    if start == stop {
+        //|| *start != 0 {
         return;
     }
 
@@ -281,7 +282,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
         seen.push(*start);
         SEEN_GUARDS.insert(*start);
         if !set_seen.insert(*start) {
-           dupes.push(*start); 
+            dupes.push(*start);
         }
         start = start.offset(1);
     }
@@ -289,7 +290,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
     let max = seen.iter().fold(0, |max, &x| if x > max { x } else { max });
     MAX_EDGES_FOUND = max as usize + 1;
     for i in 0..=max {
-        if !set_seen.contains(&i) { 
+        if !set_seen.contains(&i) {
             UNUSED_GUARD_INDEXES.insert(i);
         }
     }

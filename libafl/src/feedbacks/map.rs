@@ -1,6 +1,5 @@
 //! Map feedback, maximizing or minimizing maps, for example the afl-style map observer.
 
-use hashbrown::HashSet;
 use alloc::{borrow::Cow, vec::Vec};
 #[rustversion::nightly]
 use core::simd::prelude::SimdOrd;
@@ -9,25 +8,26 @@ use core::{
     marker::PhantomData,
     ops::{BitAnd, BitOr, Deref, DerefMut},
 };
+use hashbrown::HashSet;
 
 // #[rustversion::nightly]
 use libafl_bolts::AsSlice;
 use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef},
-    AsIter, HasRefCnt, Named
+    AsIter, HasRefCnt, Named,
 };
 use num_traits::PrimInt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    corpus::{Testcase, CorpusId},
+    corpus::{CorpusId, Testcase},
     events::{Event, EventFirer},
     executors::ExitKind,
-    feedbacks::{Feedback, HasObserverHandle, cfg_prescience::ControlFlowGraph},
+    feedbacks::{cfg_prescience::ControlFlowGraph, Feedback, HasObserverHandle},
     inputs::UsesInput,
     monitors::{AggregatorOps, UserStats, UserStatsValue},
     observers::{CanTrack, MapObserver, Observer, ObserversTuple},
-    state::{State, HasCorpus},
+    state::{HasCorpus, State},
     Error, HasMetadata, HasNamedMetadata,
 };
 
@@ -343,16 +343,16 @@ pub struct MapUncoveredNeighboursMetadata {
 impl MapUncoveredNeighboursMetadata {
     /// Compute the score given this metadata
     pub fn compute_score(&self) -> f64 {
-//        self.all_reachable.len() as f64
+        //        self.all_reachable.len() as f64
         let mut score = 0f64;
         for &(depth, _idx) in &self.all_reachable {
-//            let weighting = if depth > 10 {
-//                2.pow(10)
-//            } else {
-//                2.pow(depth as u32 - 1)
-//            };
-//            score += 1f64 / weighting as f64;
-//            score += 1f64
+            //            let weighting = if depth > 10 {
+            //                2.pow(10)
+            //            } else {
+            //                2.pow(depth as u32 - 1)
+            //            };
+            //            score += 1f64 / weighting as f64;
+            //            score += 1f64
             score += 1f64 / depth as f64
         }
         score
@@ -384,8 +384,6 @@ libafl_bolts::impl_serdeany!(MapUncoveredNeighboursMetadata);
 //        Self { set }
 //    }
 //}
-
-
 
 /// The state of [`MapFeedback`]
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
@@ -480,21 +478,26 @@ where
     O: MapObserver<Entry = T> + for<'it> AsIter<'it, Item = T> + for<'it> AsSlice<'it, Entry = T>,
     R: Reducer<T>,
     S: State + HasNamedMetadata + HasMetadata + HasCorpus,
-    T: Default + Copy + Serialize + for<'de> Deserialize<'de> + PartialEq + Debug + 'static + From<u8>,
+    T: Default
+        + Copy
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + PartialEq
+        + Debug
+        + 'static
+        + From<u8>,
     C: CanTrack + AsRef<O> + Observer<S>,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         // Initialize `MapFeedbackMetadata` with an empty vector and add it to the state.
         // The `MapFeedbackMetadata` would be resized on-demand in `is_interesting`
         state.add_named_metadata(&self.name, MapFeedbackMetadata::<T>::default());
-        state.add_metadata(
-            MapNeighboursFeedbackMetadata { 
-                hitcounts: vec![], 
-                reachable_blocks: HashSet::new(),
-                covered_blocks: HashSet::new(),
-                corpus_ids_present_at_recalc: vec![],
-            }, 
-        );
+        state.add_metadata(MapNeighboursFeedbackMetadata {
+            hitcounts: vec![],
+            reachable_blocks: HashSet::new(),
+            covered_blocks: HashSet::new(),
+            corpus_ids_present_at_recalc: vec![],
+        });
         Ok(())
     }
 
@@ -613,10 +616,11 @@ where
             let _now = Instant::now();
 
             let coverage_map = history_map.to_vec();
-            let _map_filled_set = history_map.iter()
+            let _map_filled_set = history_map
+                .iter()
                 .enumerate()
-                .filter(|(_idx,val)| **val != T::default())
-                .map(|(idx,_)| idx)
+                .filter(|(_idx, val)| **val != T::default())
+                .map(|(idx, _)| idx)
                 .collect::<HashSet<usize>>();
 
             if let Ok(cfg_metadata) = state.metadata_mut::<ControlFlowGraph>() {
@@ -630,20 +634,26 @@ where
                         continue;
                     }
 
-                    if neighbour_idx > coverage_map.len() ||  coverage_map[neighbour_idx] == T::default() {
+                    if neighbour_idx > coverage_map.len()
+                        || coverage_map[neighbour_idx] == T::default()
+                    {
                         direct_neighbours.insert(neighbour_idx);
                     }
                 }
 
-                let meta = MapUncoveredNeighboursMetadata { 
+                let meta = MapUncoveredNeighboursMetadata {
                     all_reachable: vec![],
-                    // direct_neighbours: direct_neighbours.clone(), 
+                    // direct_neighbours: direct_neighbours.clone(),
                     // called_functions: HashSet::new(),
                 };
                 testcase.add_metadata(meta);
 
                 let all_edges_len = cfg_metadata.all_edges_len();
-                let required_len = if all_edges_len > len { all_edges_len } else { len };
+                let required_len = if all_edges_len > len {
+                    all_edges_len
+                } else {
+                    len
+                };
 
                 let neighbours_state = state
                     .metadata_mut::<MapNeighboursFeedbackMetadata>()
@@ -662,7 +672,9 @@ where
                 }
                 for idx in direct_neighbours {
                     // Don't increment indirect neighbours...
-                    if idx >= 1_000_000 { continue; }
+                    if idx >= 1_000_000 {
+                        continue;
+                    }
                     counts[idx] += 1;
                 }
             }
@@ -670,7 +682,6 @@ where
             // recalc the reachable set for any entries we have just glanced across
             let novelties_set = novelties.into_iter().collect::<HashSet<usize>>();
             println!("Novelties: {:?}", novelties_set);
-
         }
 
         // opt: if not tracking optimisations, we technically don't show the *current* history

@@ -394,15 +394,13 @@ where
     }
 }
 
-
 /// Metadata storing the number of mutations executed for this testcase
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TestcaseMutationsMetadata {
     /// Number of mutants generated and executed for this testcase
-    pub num_mutations_executed: usize
+    pub num_mutations_executed: usize,
 }
 libafl_bolts::impl_serdeany!(TestcaseMutationsMetadata);
-
 
 /// The Metadata for each testcase used in power schedules.
 #[derive(Serialize, Deserialize, Clone, Debug)]

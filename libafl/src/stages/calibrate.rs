@@ -12,7 +12,10 @@ use crate::{
     corpus::{Corpus, SchedulerTestcaseMetadata},
     events::{Event, EventFirer, LogSeverity},
     executors::{Executor, ExitKind, HasObservers},
-    feedbacks::{map::{MapNeighboursFeedbackMetadata, MapFeedbackMetadata}, HasObserverHandle},
+    feedbacks::{
+        map::{MapFeedbackMetadata, MapNeighboursFeedbackMetadata},
+        HasObserverHandle,
+    },
     fuzzer::Evaluator,
     inputs::UsesInput,
     monitors::{AggregatorOps, UserStats, UserStatsValue},
@@ -183,8 +186,7 @@ where
                 }
 
                 if iter < CAL_STAGE_MAX {
-                    let neighbours_state = state
-                        .metadata_mut::<MapNeighboursFeedbackMetadata>();
+                    let neighbours_state = state.metadata_mut::<MapNeighboursFeedbackMetadata>();
                     if let Ok(neighbours_state) = neighbours_state {
                         for &entry in &unstable_entries {
                             neighbours_state.covered_blocks.insert(entry);
