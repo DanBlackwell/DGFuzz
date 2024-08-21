@@ -854,15 +854,65 @@ impl ControlFlowGraph {
                 let succ_cov_idx = self.edge_with_uuid[succ_uuid];
                 let succ_bb = &self.all_edges[succ_cov_idx];
                 if let Some(cov_map_idx) = succ_bb.coverage_map_idx {
-                    if covered.insert(cov_map_idx.0 as usize) {
+                    // if covered.insert(cov_map_idx.0 as usize) {
+                    if !all_coverage_map_indexes.contains(&(cov_map_idx.0 as usize)) {
                         children.push(cov_map_idx.0 as usize);
+                    }
+                    // }
+                }
+            }
+
+            if children.is_empty() {
+                continue;
+            }
+
+            if bb.called_funcs.is_empty() {
+                neighbours_info.insert(to_explore, children);
+            } else {
+                // if there's a called function then the actual parent of the successors 
+                // will be the block that returns from the last called function.
+                // note that this is not an issue when entering functions (or even chaining
+                // them), as the entry point is guaranteed to be unique
+                let mut parents = HashSet::new();
+                let mut handled_funcs = HashSet::new();
+                let mut stack = vec![bb.called_funcs.last().unwrap()];
+                handled_funcs.insert(stack[0]);
+                while let Some(func) = stack.pop() {
+                    let Some(edge_lists) = self.edges_in_func_named.get(func) else {
+                        continue;
+                    };
+                    let edges = &edge_lists[0];
+                    for edge_idx in edges {
+                        let bb = &self.all_edges[*edge_idx];
+                        // if it's an indirect call we have no clue of the predecessor...
+                        // if bb.successor_uuids.is_empty() && bb.num_indirect_calls > 0
+
+                        if bb.successor_uuids.is_empty() && 
+                            bb.coverage_map_idx.is_some() &&
+                            !parents.contains(&bb.coverage_map_idx.unwrap()) &&
+                            input_coverage_map_indexes.contains(&(bb.coverage_map_idx.unwrap().0 as usize)) 
+                        {
+                            if let Some(next_func) = bb.called_funcs.last() {
+                                if !handled_funcs.contains(next_func) {
+                                    stack.push(bb.called_funcs.last().unwrap());
+                                }
+                            } else {
+                                parents.insert(bb.coverage_map_idx.unwrap());
+                            }
+                        }
+                    } 
+                }
+
+                for parent in parents {
+                    let idx = parent.0 as usize;
+                    if let Some(cur_children) = neighbours_info.get_mut(&idx) {
+                        cur_children.append(&mut children.clone());
+                    } else {
+                        neighbours_info.insert(idx, children.clone());
                     }
                 }
             }
 
-            if !children.is_empty() {
-                neighbours_info.insert(to_explore, children);
-            }
         }
 
         neighbours_info
