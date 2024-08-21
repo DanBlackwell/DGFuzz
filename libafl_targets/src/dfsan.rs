@@ -2,7 +2,7 @@
 //! The colorization stage from `colorization()` in afl++
 use alloc::{borrow::ToOwned, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData, ops::Range};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use std::path::PathBuf;
 use nix::sys::signal::Signal;
 
@@ -90,7 +90,7 @@ where
 impl<'a, EM, E, Z> DataflowStage<'a, EM, E, Z>
 where 
     E: UsesState + UsesInput, 
-    E::State: HasRand + HasMetadata,
+    E::State: HasRand + HasMetadata + HasCorpus,
     E::Input: HasMutatorBytes + HasTargetBytes,
 {
     /// Create a new instance, this includes a forkserver
@@ -299,6 +299,91 @@ where
 
         Ok(bytes_depended_on_by_edge)
     }
+
+    fn do_simple_mutate(
+        &mut self, 
+        fuzzer: &mut Z, 
+        state: &mut E::State, 
+        executor: &mut E,
+        manager: &mut EM, 
+        num_mutations: usize
+    ) -> Result<(), Error> 
+    where
+        EM: UsesState<State = E::State> + EventFirer + EventRestarter,
+        E: HasObservers + Executor<EM, Z>,
+        E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
+        E::Input: HasMutatorBytes + HasTargetBytes,
+        Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
+    {
+        let idx = state.corpus().current().unwrap();
+
+        let mut mutator = StdScheduledMutator::with_max_stack_pow(
+            havoc_mutations_fixed_length(), 6
+        );
+
+         let original_input = {
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            tc.input().as_ref().unwrap().clone()
+        };
+
+        let target_bytes_pos = {
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
+            let mut res = HashSet::new();
+            for (_edge, bytes) in &df_meta.bytes_depended_on_by_edge {
+                for byte_pos in bytes { res.insert(*byte_pos); }
+            }
+            res
+        };
+
+        // build a vec of the values of target bytes
+        let target_bytes = {
+            let mut res = Vec::with_capacity(target_bytes_pos.len());
+            for &pos in &target_bytes_pos {
+                res.push(original_input.bytes()[pos]);
+            }
+            res
+        };
+
+        // println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
+        let target_bytes_input = BytesInput::new(target_bytes.clone());
+
+        // test out num_mutations different mutants
+        for _ in 0..num_mutations {
+            let mut input = target_bytes_input.clone();
+
+            start_timer!(state);
+            let mutated = mutator.mutate(state, &mut input)?;
+            mark_feature_time!(state, PerfFeature::Mutate);
+
+            if mutated == MutationResult::Skipped {
+                continue;
+            }
+
+            let altered_bytes = input.bytes().to_vec();
+            let mut input = original_input.clone();
+            let bytes = input.bytes_mut();
+            // replace the target bytes with the mutated byte values
+            for (arr_idx, dest_pos) in target_bytes_pos.iter().enumerate() {
+                bytes[*dest_pos] = altered_bytes[arr_idx];
+            }
+
+            // Time is measured directly the `evaluate_input` function
+            let (untransformed, post) = input.try_transform_into(state)?;
+            let (result, corpus_idx) = fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+        
+            if result == ExecuteInputResult::Corpus {
+                println!("Dataflow stage found a new corpus entry!");
+            }
+
+            start_timer!(state);
+            mutator.post_exec(state, corpus_idx)?;
+            post.post_exec(state, corpus_idx)?;
+            mark_feature_time!(state, PerfFeature::MutatePostExec);
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a, EM, E, Z> UsesState for DataflowStage<'a, EM, E, Z>
@@ -352,13 +437,14 @@ where
 
             let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &covered_blocks)
+                let cov = HashSet::from_iter(covered_indexes.clone().into_iter());
+                cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &cov)
             };
             // let mut sorted_all = covered_blocks.clone().into_iter().collect::<Vec<usize>>();
             // sorted_all.sort();
             // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
 
-            let required_edges: Vec<usize> = direct_neighbours_for_edge.keys().copied().collect();
+            let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
             let bytes_depended_on_by_edge = self.get_bytes_depended_on_by_edges(
                 fuzzer, executor, state, manager, &required_edges)?;
 
@@ -395,6 +481,8 @@ where
         } else {
             drop(tc);
         }
+
+        // self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations)?;
 
         {
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
@@ -437,10 +525,10 @@ where
 
             let mut power = 0;
             for neighbour in neighbours {
-                if !covered_blocks.contains(neighbour) {
+                // if !covered_blocks.contains(neighbour) {
                     let muts = df_meta.num_mutations_for_edge.get(neighbour).unwrap();
                     power += muts;
-                }
+                // }
             }
 
             if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
@@ -612,11 +700,19 @@ where
             let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
             for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
                 let edges = &tc_meta_copy.edges_depending_on_bytes[target_bytes_pos];
+                let mut weirdies = vec![];
                 for edge in edges {
-                    for neighbour in &tc_meta_copy.direct_neighbours_for_edge[edge] {
-                        let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
-                        *count += *num_mutations;
-                    }
+                    if !tc_meta_copy.direct_neighbours_for_edge.contains_key(edge) { weirdies.push(*edge); }
+                    _ = tc_meta_copy.direct_neighbours_for_edge.get(edge).is_some_and(|neighbours| {
+                        for neighbour in neighbours {
+                            let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
+                            *count += *num_mutations;
+                        }
+                        true
+                    });
+                }
+                if !weirdies.is_empty() {
+                    println!("Found {} weirdies given {} covered edges (weirdies: {:?})", weirdies.len(), edges.len(), weirdies);
                 }
             }
         }
