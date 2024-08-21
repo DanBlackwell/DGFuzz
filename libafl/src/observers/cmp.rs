@@ -170,11 +170,11 @@ where
 
                 // if we have a list of parents of unseen edges, and prev_edge isn't one of them,
                 // don't store these Cmps
-                if unseen_edge_parents.as_ref().is_some_and(|e| {
-                    !e.contains(&cmp_map.prev_edge_index_for(i))
-                }) {
-                    continue;
-                }
+                // if unseen_edge_parents.as_ref().is_some_and(|e| {
+                //     !e.contains(&cmp_map.prev_edge_index_for(i))
+                // }) {
+                //     continue;
+                // }
 
                 if !self.map.contains_key(&cmp_map.prev_edge_index_for(i)) {
                     self.map.insert(cmp_map.prev_edge_index_for(i), vec![]);

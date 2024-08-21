@@ -396,10 +396,25 @@ where
             drop(tc);
         }
 
+        {
+            let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+            let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
+
+            // clear out any dependencies that can't reach new edges
+            let dead_edges = tc_meta.direct_neighbours_for_edge.iter().filter(|(_, children)| {
+                for child in *children {
+                    if !covered_blocks.contains(child) { return false; }
+                }
+                true
+            });
+            for (parent, _) in dead_edges {
+                tc_meta.bytes_depended_on_by_edge.remove(parent);
+            }
+        }
+
         let tc_meta_copy = {
             let tc = state.corpus().get(idx).unwrap().borrow();
-            let tc_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
-            tc_meta.clone()
+            tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
@@ -409,7 +424,9 @@ where
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
-            let dependent_bytes = &tc_meta_copy.bytes_depended_on_by_edge[parent];
+            let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_edge.get(parent) else {
+                continue;
+            };
             if dependent_bytes.is_empty() { continue; }
             let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
             // if we've already tested every possible value for this edge...

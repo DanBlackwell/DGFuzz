@@ -9,6 +9,7 @@ use core::{
     ops::{Add, AddAssign, Deref},
     slice::Iter,
 };
+use std::borrow::ToOwned;
 #[cfg(feature = "std")]
 use std::{
     fs::File,
@@ -16,16 +17,16 @@ use std::{
     path::Path,
 };
 
-use hashbrown::HashSet;
-use libafl_bolts::{rands::Rand, AsSlice};
+use hashbrown::{HashMap, HashSet};
+use libafl_bolts::{dataflow_metadata::TestcaseDataflowMetadata, rands::Rand, AsSlice};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
 use crate::mutators::str_decode;
 use crate::{
-    corpus::{CorpusId, HasCurrentCorpusId}, inputs::{HasMutatorBytes, UsesInput}, mutators::{
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId}, inputs::{HasMutatorBytes, UsesInput}, mutators::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
-    }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata}, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
+    }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata}, prelude::MapNeighboursFeedbackMetadata, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
 };
 
 /// A state metadata holding a list of tokens
@@ -418,6 +419,206 @@ impl TokenReplace {
 #[derive(Debug, Default)]
 pub struct I2SRandReplace;
 
+impl I2SRandReplace
+{
+    fn targeted_replace<I, S>(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> 
+    where
+        S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
+        I: HasMutatorBytes,
+    {
+        let Some(cmp_meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
+            return Ok(MutationResult::Skipped);
+        };
+        if cmp_meta.list.is_empty() {
+            return Ok(MutationResult::Skipped);
+        }
+
+        // let full_neighbours_meta = state
+        //     .metadata::<MapNeighboursFeedbackMetadata>()
+        //     .unwrap();
+
+        // let covered_blocks = full_neighbours_meta.covered_blocks.clone();
+        let mut edges_bytes_and_cmp_vals = {
+            let mut res = vec![];
+
+            let curr_idx = state.corpus().current().unwrap();
+            let tc = state.corpus().get(curr_idx).unwrap().borrow();
+            let df_meta = tc.metadata_map().get::<TestcaseDataflowMetadata>().unwrap();
+
+            for (edge, bytes) in &df_meta.bytes_depended_on_by_edge {
+                if bytes.len() < 1 { continue; }
+                let Some(cmpvals) = cmp_meta.map.get(edge) else { continue; };
+                if cmpvals.is_empty() { continue; }
+
+                // println!("Found cmpvals and byte-dependency map for {edge}");
+
+                let same_len_cmpvals: Vec<CmpValues> = cmpvals.into_iter().filter(|&c| {
+                        let exact_len = match bytes.len() {
+                            1 => match c { CmpValues::U8(_) => true, _ => false },
+                            2 => match c { CmpValues::U16(_) => true, _ => false },
+                            4 => match c { CmpValues::U32(_) => true, _ => false },
+                            8 => match c { CmpValues::U64(_) => true, _ => false },
+                            _ => false
+                        };
+
+                        exact_len || match c {
+                            CmpValues::Bytes(v) => v.0.len() == bytes.len(),
+                            _ => false                        
+                        }
+                    })
+                    .cloned()
+                    .collect();
+
+                for cmpval in same_len_cmpvals {
+                    // println!("  found cmpval {:?} with same length for edge {edge} (on bytes {:?}", cmpval, bytes);
+                    res.push((*edge, bytes.to_owned(), cmpval));
+                }
+            }
+            res
+        };
+
+        if edges_bytes_and_cmp_vals.is_empty() { return Ok(MutationResult::Skipped); }
+
+        let bytes = input.bytes_mut();
+
+        // shuffle them
+        {
+            let n = edges_bytes_and_cmp_vals.len();
+            for i in 0..(n - 1) {
+                // Generate random index j, such that: i <= j < n
+                // The remainder (`%`) after division is always less than the divisor.
+                let j = state.rand_mut().below(n - i) + i;
+                edges_bytes_and_cmp_vals.swap(i, j);
+            }
+        }
+
+        for (edge, byte_idxs, cmp_val) in edges_bytes_and_cmp_vals {
+            let success = match cmp_val.clone() {
+                CmpValues::U8(v) => {
+                    if bytes[byte_idxs[0]] == v.0 {
+                        bytes[byte_idxs[0]] = v.1;
+                        true
+                    } else if bytes[byte_idxs[0]] == v.1 {
+                        bytes[byte_idxs[0]] = v.0;
+                        true
+                    } else {
+                        false
+                    }
+                },
+                CmpValues::U16(v) => {
+                    let val =
+                        u16::from_be_bytes([bytes[byte_idxs[0]], bytes[byte_idxs[1]]]);
+                    if val == v.0 {
+                        for (idx, val) in v.0.to_be_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val.swap_bytes() == v.0 {
+                        for (idx, val) in v.0.to_le_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val == v.1 {
+                        for (idx, val) in v.1.to_be_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val.swap_bytes() == v.1 {
+                        for (idx, val) in v.1.to_le_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                },
+                CmpValues::U32(v) => {
+                    let val =
+                        u32::from_be_bytes([
+                            bytes[byte_idxs[0]], bytes[byte_idxs[1]], bytes[byte_idxs[2]], bytes[byte_idxs[3]]
+                        ]);
+                    if val == v.0 {
+                        for (idx, val) in v.0.to_be_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val.swap_bytes() == v.0 {
+                        for (idx, val) in v.0.to_le_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val == v.1 {
+                        for (idx, val) in v.1.to_be_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val.swap_bytes() == v.1 {
+                        for (idx, val) in v.1.to_le_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                },
+                CmpValues::U64(v) => {
+                    let val =
+                        u64::from_be_bytes([
+                            bytes[byte_idxs[0]], bytes[byte_idxs[1]], bytes[byte_idxs[2]], bytes[byte_idxs[3]],
+                            bytes[byte_idxs[4]], bytes[byte_idxs[5]], bytes[byte_idxs[6]], bytes[byte_idxs[7]]
+                        ]);
+                    if val == v.0 {
+                        for (idx, val) in v.0.to_be_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val.swap_bytes() == v.0 {
+                        for (idx, val) in v.0.to_le_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val == v.1 {
+                        for (idx, val) in v.1.to_be_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if val.swap_bytes() == v.1 {
+                        for (idx, val) in v.1.to_le_bytes().iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                },
+                CmpValues::Bytes(v) => {
+                    let byte_vals: Vec<u8> = byte_idxs.iter().map(|&idx| bytes[idx]).collect();
+                    if byte_vals == v.0 {
+                        for (idx, val) in v.0.iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else if byte_vals == v.1 {
+                        for (idx, val) in v.1.iter().enumerate() {
+                            bytes[byte_idxs[idx]] = *val;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if success { 
+                println!("CmpLog managed to replace at edge {edge} with cmpval {:?}", cmp_val);
+                return Ok(MutationResult::Mutated); 
+            }
+        }
+
+        Ok(MutationResult::Skipped)
+    }
+}
+
 impl<I, S> Mutator<I, S> for I2SRandReplace
 where
     S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
@@ -428,6 +629,12 @@ where
         let size = input.bytes().len();
         if size == 0 {
             return Ok(MutationResult::Skipped);
+        }
+
+        if state.rand_mut().below(2) == 1 {
+            let res = self.targeted_replace(state, input)?;
+            // if there were no exxact matches fall back to standard cmplog
+            if res == MutationResult::Mutated { return Ok(res); }
         }
 
         let cmps_len = {
