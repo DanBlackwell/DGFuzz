@@ -291,11 +291,26 @@ where
             bytes.sort();
         }
     
-        println!("bytes depended on by edge: {:?}", 
-            bytes_depended_on_by_edge.iter()
-            .filter(|(_,x)| x.len() > 0)
-            .collect::<HashMap<&usize, &Vec<usize>>>()
+        println!(
+            "bytes depended on by edge: {:?}",
+            bytes_depended_on_by_edge
+                .iter()
+                .filter(|(_, x)| x.len() > 0)
+                .map(|(edge, bytes)| {
+                    if bytes.len() > 10 {
+                        (edge, format!("{} bytes", bytes.len()))
+                    } else {
+                        (edge, format!("{:?}", bytes))
+                    }
+                })
+                .collect::<HashMap<&usize, std::string::String>>()
         );
+
+        // Save memory by filtering large dependencies (chances are the targetting won't help much)
+        bytes_depended_on_by_edge = bytes_depended_on_by_edge
+            .into_iter()
+            .filter(|(_edge, bytes)| bytes.len() < 50)
+            .collect();
 
         Ok(bytes_depended_on_by_edge)
     }
@@ -437,8 +452,8 @@ where
 
             let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                let cov = HashSet::from_iter(covered_indexes.clone().into_iter());
-                cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &cov)
+                // let cov = HashSet::from_iter(covered_indexes.clone().into_iter());
+                cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &covered_blocks)
             };
             // let mut sorted_all = covered_blocks.clone().into_iter().collect::<Vec<usize>>();
             // sorted_all.sort();
@@ -525,10 +540,10 @@ where
 
             let mut power = 0;
             for neighbour in neighbours {
-                // if !covered_blocks.contains(neighbour) {
+                if !covered_blocks.contains(neighbour) {
                     let muts = df_meta.num_mutations_for_edge.get(neighbour).unwrap();
                     power += muts;
-                // }
+                }
             }
 
             if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
@@ -700,9 +715,9 @@ where
             let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
             for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
                 let edges = &tc_meta_copy.edges_depending_on_bytes[target_bytes_pos];
-                let mut weirdies = vec![];
+                // let mut weirdies = vec![];
                 for edge in edges {
-                    if !tc_meta_copy.direct_neighbours_for_edge.contains_key(edge) { weirdies.push(*edge); }
+                    // if !tc_meta_copy.direct_neighbours_for_edge.contains_key(edge) { weirdies.push(*edge); }
                     _ = tc_meta_copy.direct_neighbours_for_edge.get(edge).is_some_and(|neighbours| {
                         for neighbour in neighbours {
                             let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
@@ -711,9 +726,9 @@ where
                         true
                     });
                 }
-                if !weirdies.is_empty() {
-                    println!("Found {} weirdies given {} covered edges (weirdies: {:?})", weirdies.len(), edges.len(), weirdies);
-                }
+                // if !weirdies.is_empty() {
+                //     println!("Found {} weirdies given {} covered edges (weirdies: {:?})", weirdies.len(), edges.len(), weirdies);
+                // }
             }
         }
 
