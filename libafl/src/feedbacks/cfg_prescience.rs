@@ -559,7 +559,7 @@ impl ControlFlowGraph {
             let succ_uuids = bb.successor_uuids.clone();
             for func in called_funcs {
                 if let Some(func_neighbours) = self.neighbours_for_start_of_function(&func) {
-                    println!("exploring {func}, neighbours: {:?}", func_neighbours);
+                    // println!("exploring {func}, neighbours: {:?}", func_neighbours);
                     for neighbour in func_neighbours {
                         neighbours.insert(neighbour);
                     }
