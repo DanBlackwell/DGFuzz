@@ -981,7 +981,7 @@ bool ModuleSanitizerCoverageCFG::instrumentModule(
   SanCovTracePCGuard =
       M.getOrInsertFunction(SanCovTracePCGuardName, VoidTy, Int32PtrTy);
 
-  auto moduleName = M.getModuleIdentifier();
+  std::string moduleName = M.getModuleIdentifier();
   for (auto &F : M)
     instrumentFunction(moduleName, F, DTCallback, PDTCallback);
 
@@ -1094,73 +1094,6 @@ static bool IsInterestingCmp(ICmpInst *CMP, const DominatorTree *DT,
             return false;
   return true;
 }
-
-// /* Function that we never instrument or analyze */
-// /* Note: this ignore check is also called in isInInstrumentList() */
-// bool isIgnoreFunction(const llvm::Function *F) {
-// 
-//   // Starting from "LLVMFuzzer" these are functions used in libfuzzer based
-//   // fuzzing campaign installations, e.g. oss-fuzz
-// 
-//   static constexpr const char *ignoreList[] = {
-// 
-//       "asan.",
-//       "llvm.",
-//       "sancov.",
-//       "__ubsan",
-//       "ign.",
-//       "__afl",
-//       "_fini",
-//       "__libc_",
-//       "__asan",
-//       "__msan",
-//       "__cmplog",
-//       "__sancov",
-//       "__san",
-//       "__cxx_",
-//       "__decide_deferred",
-//       "_GLOBAL",
-//       "_ZZN6__asan",
-//       "_ZZN6__lsan",
-//       "msan.",
-//       "LLVMFuzzerM",
-//       "LLVMFuzzerC",
-//       "LLVMFuzzerI",
-//       "maybe_duplicate_stderr",
-//       "discard_output",
-//       "close_stdout",
-//       "dup_and_close_stderr",
-//       "maybe_close_fd_mask",
-//       "ExecuteFilesOnyByOne"
-// 
-//   };
-// 
-//   for (auto const &ignoreListFunc : ignoreList) {
-// 
-//     if (F->getName().startswith(ignoreListFunc)) { return true; }
-// 
-//   }
-// 
-//   static constexpr const char *ignoreSubstringList[] = {
-// 
-//       "__asan",     "__msan",       "__ubsan",    "__lsan",  "__san",
-//       "__sanitize", "DebugCounter", "DwarfDebug", "DebugLoc"
-// 
-//   };
-// 
-//   // This check is very sensitive, we must be sure to not include patterns
-//   // that are part of user-written C++ functions like the ones including
-//   // std::string as parameter (see #1927) as the mangled type is inserted in the
-//   // mangled name of the user-written function
-//   for (auto const &ignoreListFunc : ignoreSubstringList) {
-// 
-//     // hexcoder: F->getName().contains() not avaiilable in llvm 3.8.0
-//     if (StringRef::npos != F->getName().find(ignoreListFunc)) { return true; }
-// 
-//   }
-// 
-//   return false;
-// }
 
 bool ModuleSanitizerCoverageCFG::WillInstrumentFunction(Function &F, bool allowExternal, bool printReason) {
   if (!allowExternal && F.empty()) {

@@ -739,7 +739,7 @@ void ModuleSanitizerCoverageCFG::fetchCFGfileInfo(Module &M) {
     // Open the binary file for reading in binary mode
     std::ifstream file(cfg_path, std::ios::binary);
 
-    uint32_t coverage_index_offset = 0, initial_function_count = 0;
+    uint32_t initial_function_count = 0;
     if (file.is_open()) {
       std::streampos fsize = file.tellg();
       file.seekg(0, std::ios::end);
@@ -787,7 +787,7 @@ void ModuleSanitizerCoverageCFG::fetchCFGfileInfo(Module &M) {
         return;
     }
 
-    auto moduleName = M.getModuleIdentifier();
+    std::string moduleName = M.getModuleIdentifier();
     std::string line;
     while (std::getline(in, line)) {
       std::string key;
@@ -979,7 +979,7 @@ bool ModuleSanitizerCoverageCFG::instrumentModule(
   SanCovTracePCGuard =
       M.getOrInsertFunction(SanCovTracePCGuardName, VoidTy, Int32PtrTy);
 
-  auto moduleName = M.getName().str();
+  std::string moduleName = M.getModuleIdentifier();
   for (auto &F : M)
     instrumentFunction(moduleName, F, DTCallback, PDTCallback);
 
@@ -1135,7 +1135,11 @@ bool isIgnoreFunction(const llvm::Function *F) {
 
   for (auto const &ignoreListFunc : ignoreList) {
 
+#if LLVM_VERSION_MAJOR >= 19
+    if (F->getName().starts_with(ignoreListFunc)) { return true; }
+#else
     if (F->getName().startswith(ignoreListFunc)) { return true; }
+#endif
 
   }
 
@@ -1158,6 +1162,7 @@ bool isIgnoreFunction(const llvm::Function *F) {
   }
 
   return false;
+
 }
 
 bool ModuleSanitizerCoverageCFG::WillInstrumentFunction(Function &F, bool allowExternal, bool printReason) {
