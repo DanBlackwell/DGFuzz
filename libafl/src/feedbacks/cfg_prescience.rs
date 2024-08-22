@@ -3,6 +3,7 @@
 use alloc::{borrow::ToOwned, collections::VecDeque, string::{String, ToString}, vec::Vec};
 use hashbrown::{HashMap, HashSet};
 
+use libafl_bolts::dataflow_metadata::TestcaseDirectNeighboursMetadata;
 use serde::{Deserialize, Serialize};
 
 /// A wrapper for u32 indicating the Coverage map index for a basic block / instruction
@@ -826,95 +827,152 @@ impl ControlFlowGraph {
         called
     }
 
+    // /// Return a map from parent edges to a list of their direct neighbours (descendents)
+    // pub fn get_map_from_edges_to_direct_neighbours(
+    //     &mut self, 
+    //     input_coverage_map_indexes: &[usize],
+    //     all_coverage_map_indexes: &HashSet<usize>,
+    // ) -> HashMap<usize, Vec<usize>> {
+
+    //     let mut neighbours_info = HashMap::new();
+
+    //     // set any indexes we've already covered...
+    //     let mut covered = all_coverage_map_indexes.clone();
+
+    //     for &to_explore in input_coverage_map_indexes {
+    //         let mut children = vec![];
+
+    //         // DO NOT track edges into functions - if these functions are hit,
+    //         // the bb will already be in `input_coverage_map_indexes`; 
+    //         // tracking conditionals beyond the first bb means that the child
+    //         // ends up with the wrong parent (it's actually grandparent) 
+
+    //         // DO NOT add these huge index indirect calls
+    //         // for indirect_call_num in 0..bb.num_indirect_calls {
+
+    //         let bb = &self.all_edges[to_explore];
+    //         for succ_uuid in &bb.successor_uuids {
+    //             let succ_cov_idx = self.edge_with_uuid[succ_uuid];
+    //             let succ_bb = &self.all_edges[succ_cov_idx];
+    //             if let Some(cov_map_idx) = succ_bb.coverage_map_idx {
+    //                 // if covered.insert(cov_map_idx.0 as usize) {
+    //                 if !all_coverage_map_indexes.contains(&(cov_map_idx.0 as usize)) {
+    //                     children.push(cov_map_idx.0 as usize);
+    //                 }
+    //                 // }
+    //             }
+    //         }
+
+    //         if children.is_empty() {
+    //             continue;
+    //         }
+
+    //         if bb.called_funcs.is_empty() {
+    //             neighbours_info.insert(to_explore, children);
+    //         } else {
+    //             // if there's a called function then the actual parent of the successors 
+    //             // will be the block that returns from the last called function.
+    //             // note that this is not an issue when entering functions (or even chaining
+    //             // them), as the entry point is guaranteed to be unique
+    //             let mut parents = HashSet::new();
+    //             let mut handled_funcs = HashSet::new();
+    //             let mut stack = vec![bb.called_funcs.last().unwrap()];
+    //             handled_funcs.insert(stack[0]);
+    //             while let Some(func) = stack.pop() {
+    //                 let Some(edge_lists) = self.edges_in_func_named.get(func) else {
+    //                     continue;
+    //                 };
+    //                 let edges = &edge_lists[0];
+    //                 for edge_idx in edges {
+    //                     let bb = &self.all_edges[*edge_idx];
+    //                     // if it's an indirect call we have no clue of the predecessor...
+    //                     // if bb.successor_uuids.is_empty() && bb.num_indirect_calls > 0
+
+    //                     if bb.successor_uuids.is_empty() && 
+    //                         bb.coverage_map_idx.is_some() &&
+    //                         !parents.contains(&bb.coverage_map_idx.unwrap()) &&
+    //                         input_coverage_map_indexes.contains(&(bb.coverage_map_idx.unwrap().0 as usize)) 
+    //                     {
+    //                         if let Some(next_func) = bb.called_funcs.last() {
+    //                             if !handled_funcs.contains(next_func) {
+    //                                 stack.push(bb.called_funcs.last().unwrap());
+    //                             }
+    //                         } else {
+    //                             parents.insert(bb.coverage_map_idx.unwrap());
+    //                         }
+    //                     }
+    //                 } 
+    //             }
+
+    //             for parent in parents {
+    //                 let idx = parent.0 as usize;
+    //                 if let Some(cur_children) = neighbours_info.get_mut(&idx) {
+    //                     cur_children.append(&mut children.clone());
+    //                 } else {
+    //                     neighbours_info.insert(idx, children.clone());
+    //                 }
+    //             }
+    //         }
+
+    //     }
+
+    //     neighbours_info
+    // }
+
     /// Return a map from parent edges to a list of their direct neighbours (descendents)
-    pub fn get_map_from_edges_to_direct_neighbours(
+    pub fn direct_neighbours_for_edges_in_path(
         &mut self, 
-        input_coverage_map_indexes: &[usize],
+        path_cov_map_idxs: &[u32],
         all_coverage_map_indexes: &HashSet<usize>,
-    ) -> HashMap<usize, Vec<usize>> {
+    ) -> TestcaseDirectNeighboursMetadata {
 
-        let mut neighbours_info = HashMap::new();
+        let mut neighbours_info: HashMap<usize, HashSet<usize>> = HashMap::new();
 
-        // set any indexes we've already covered...
-        let mut covered = all_coverage_map_indexes.clone();
+        let mut prev_cov_map_idx = path_cov_map_idxs[0];
+        let mut sought_stack: Vec<HashSet<usize>> = vec![];
+        for (start_pos, cov_map_idx) in path_cov_map_idxs.iter().enumerate() {
+            if sought_stack.last().is_some_and(|sought| sought.contains(&(*cov_map_idx as usize))) {
+                let successors = sought_stack.pop().unwrap()
+                    .into_iter()
+                    .filter(|cov_map_idx| !all_coverage_map_indexes.contains(cov_map_idx))
+                    .collect::<HashSet<usize>>();
 
-        for &to_explore in input_coverage_map_indexes {
-            let mut children = vec![];
-
-            // DO NOT track edges into functions - if these functions are hit,
-            // the bb will already be in `input_coverage_map_indexes`; 
-            // tracking conditionals beyond the first bb means that the child
-            // ends up with the wrong parent (it's actually grandparent) 
-
-            // DO NOT add these huge index indirect calls
-            // for indirect_call_num in 0..bb.num_indirect_calls {
-
-            let bb = &self.all_edges[to_explore];
-            for succ_uuid in &bb.successor_uuids {
-                let succ_cov_idx = self.edge_with_uuid[succ_uuid];
-                let succ_bb = &self.all_edges[succ_cov_idx];
-                if let Some(cov_map_idx) = succ_bb.coverage_map_idx {
-                    // if covered.insert(cov_map_idx.0 as usize) {
-                    if !all_coverage_map_indexes.contains(&(cov_map_idx.0 as usize)) {
-                        children.push(cov_map_idx.0 as usize);
+                if !successors.is_empty() {
+                    // now assign these successors to the last block we saw
+                    if let Some(neighbours) = neighbours_info.get_mut(&(prev_cov_map_idx as usize)) {
+                        for succ in successors { neighbours.insert(succ); }
+                    } else {
+                        neighbours_info.insert(prev_cov_map_idx as usize, successors);
                     }
-                    // }
                 }
             }
 
-            if children.is_empty() {
+            prev_cov_map_idx = *cov_map_idx;
+
+            let bb = &self.all_edges[*cov_map_idx as usize];
+            // boring
+            if bb.successor_uuids.len() < 2 || start_pos == path_cov_map_idxs.len() - 1 {
                 continue;
             }
 
-            if bb.called_funcs.is_empty() {
-                neighbours_info.insert(to_explore, children);
-            } else {
-                // if there's a called function then the actual parent of the successors 
-                // will be the block that returns from the last called function.
-                // note that this is not an issue when entering functions (or even chaining
-                // them), as the entry point is guaranteed to be unique
-                let mut parents = HashSet::new();
-                let mut handled_funcs = HashSet::new();
-                let mut stack = vec![bb.called_funcs.last().unwrap()];
-                handled_funcs.insert(stack[0]);
-                while let Some(func) = stack.pop() {
-                    let Some(edge_lists) = self.edges_in_func_named.get(func) else {
-                        continue;
-                    };
-                    let edges = &edge_lists[0];
-                    for edge_idx in edges {
-                        let bb = &self.all_edges[*edge_idx];
-                        // if it's an indirect call we have no clue of the predecessor...
-                        // if bb.successor_uuids.is_empty() && bb.num_indirect_calls > 0
-
-                        if bb.successor_uuids.is_empty() && 
-                            bb.coverage_map_idx.is_some() &&
-                            !parents.contains(&bb.coverage_map_idx.unwrap()) &&
-                            input_coverage_map_indexes.contains(&(bb.coverage_map_idx.unwrap().0 as usize)) 
-                        {
-                            if let Some(next_func) = bb.called_funcs.last() {
-                                if !handled_funcs.contains(next_func) {
-                                    stack.push(bb.called_funcs.last().unwrap());
-                                }
-                            } else {
-                                parents.insert(bb.coverage_map_idx.unwrap());
-                            }
-                        }
-                    } 
-                }
-
-                for parent in parents {
-                    let idx = parent.0 as usize;
-                    if let Some(cur_children) = neighbours_info.get_mut(&idx) {
-                        cur_children.append(&mut children.clone());
-                    } else {
-                        neighbours_info.insert(idx, children.clone());
-                    }
+            let mut successors = HashSet::new();
+            for succ in &bb.successor_uuids {
+                if let Some(cov_map_idx) = &self.all_edges[self.edge_with_uuid[succ]].coverage_map_idx {
+                    successors.insert(cov_map_idx.0 as usize);
                 }
             }
 
+            sought_stack.push(successors); 
+        }
+        
+        if !sought_stack.is_empty() {
+            println!("Failed to find successors from the following stack: {:?} in {:?}", sought_stack, path_cov_map_idxs);
         }
 
-        neighbours_info
+        let direct_neighbours_for_edge = neighbours_info.into_iter().map(|(parent,children)| {
+            (parent, children.into_iter().collect::<Vec<usize>>())
+        }).collect();
+
+        TestcaseDirectNeighboursMetadata { direct_neighbours_for_edge }
     }
 }

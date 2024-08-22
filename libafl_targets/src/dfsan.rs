@@ -9,12 +9,7 @@ use nix::sys::signal::Signal;
 
 // use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
-    prelude::{OwnedMutSlice, UnixShMemProvider}, 
-    rands::Rand, 
-    shmem::{ShMemDescription, ShMemMetadata}, 
-    tuples::{tuple_list, tuple_list_type}, 
-    AsSliceMut, HasLen,
-    dataflow_metadata::{TestcaseDataflowMetadata, FuzzerDataflowMetadata}
+    dataflow_metadata::{FuzzerDataflowMetadata, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, prelude::{OwnedMutSlice, UnixShMemProvider}, rands::Rand, shmem::{ShMemDescription, ShMemMetadata}, tuples::{tuple_list, tuple_list_type}, AsSliceMut, HasLen
 };
 
 use libafl::{
@@ -448,13 +443,11 @@ where
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
-            drop(tc);
 
             let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
-                let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                // let cov = HashSet::from_iter(covered_indexes.clone().into_iter());
-                cfg_metadata.get_map_from_edges_to_direct_neighbours(&covered_indexes, &covered_blocks)
+                tc.metadata::<TestcaseDirectNeighboursMetadata>().unwrap().direct_neighbours_for_edge.clone()
             };
+            drop(tc);
             // let mut sorted_all = covered_blocks.clone().into_iter().collect::<Vec<usize>>();
             // sorted_all.sort();
             // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
@@ -476,7 +469,6 @@ where
 
             let meta = TestcaseDataflowMetadata { 
                 bytes_depended_on_by_edge, 
-                direct_neighbours_for_edge: direct_neighbours_for_edge.clone(),
                 mutations_tested_on_target_bytes,
                 edges_depending_on_bytes
             };
@@ -499,25 +491,40 @@ where
 
         // self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations)?;
 
+        // Filter out any mappings that we no longer need due to basic blocks being discovered
         {
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
-            let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
 
+            let direct_neighbours = &mut tc.metadata_mut::<TestcaseDirectNeighboursMetadata>()
+                .unwrap().direct_neighbours_for_edge;
             // clear out any dependencies that can't reach new edges
-            let dead_edges = tc_meta.direct_neighbours_for_edge.iter().filter(|(_, children)| {
+            let dead_edges = direct_neighbours.iter().filter(|(_, children)| {
                 for child in *children {
                     if !covered_blocks.contains(child) { return false; }
                 }
                 true
-            });
-            for (parent, _) in dead_edges {
-                tc_meta.bytes_depended_on_by_edge.remove(parent);
+            }).map(|(parent,_)| *parent)
+            .collect::<Vec<usize>>();
+
+            let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
+            for edge in dead_edges {
+                tc_meta.bytes_depended_on_by_edge.remove(&edge);
+            }
+
+            for (_bytes, edges) in &mut tc_meta.edges_depending_on_bytes {
+                *edges = edges.to_vec().into_iter()
+                    .filter(|e| !covered_blocks.contains(e))
+                    .collect();
             }
         }
 
         let tc_meta_copy = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
+        };
+        let direct_neighbours_for_edge = {
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            tc.metadata::<TestcaseDirectNeighboursMetadata>().unwrap().direct_neighbours_for_edge.clone()
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
@@ -526,7 +533,7 @@ where
         let mut max_power = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (parent, neighbours) in &tc_meta_copy.direct_neighbours_for_edge {
+        for (parent, neighbours) in &direct_neighbours_for_edge {
             let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_edge.get(parent) else {
                 continue;
             };
@@ -715,10 +722,10 @@ where
             let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
             for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
                 let edges = &tc_meta_copy.edges_depending_on_bytes[target_bytes_pos];
-                // let mut weirdies = vec![];
+                let mut weirdies = vec![];
                 for edge in edges {
-                    // if !tc_meta_copy.direct_neighbours_for_edge.contains_key(edge) { weirdies.push(*edge); }
-                    _ = tc_meta_copy.direct_neighbours_for_edge.get(edge).is_some_and(|neighbours| {
+                    if !direct_neighbours_for_edge.contains_key(edge) { weirdies.push(*edge); }
+                    _ = direct_neighbours_for_edge.get(edge).is_some_and(|neighbours| {
                         for neighbour in neighbours {
                             let count = df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
                             *count += *num_mutations;
@@ -726,9 +733,9 @@ where
                         true
                     });
                 }
-                // if !weirdies.is_empty() {
-                //     println!("Found {} weirdies given {} covered edges (weirdies: {:?})", weirdies.len(), edges.len(), weirdies);
-                // }
+                if !weirdies.is_empty() {
+                    println!("Found {} weirdies given {} covered edges (weirdies: {:?})", weirdies.len(), edges.len(), weirdies);
+                }
             }
         }
 

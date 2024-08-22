@@ -22,6 +22,8 @@ use crate::EDGES_MAP_SIZE_IN_USE;
 #[cfg(feature = "pointer_maps")]
 use crate::{coverage::EDGES_MAP_PTR, EDGES_MAP_SIZE_MAX};
 
+use libafl_bolts::dataflow_metadata::{libafl_path_edge_idxs, libafl_path_filled};
+
 use std::collections::HashSet;
 use once_cell::unsync::Lazy;
 static mut SEEN_GUARDS: Lazy<HashSet<u32>> = Lazy::new(|| HashSet::new());
@@ -221,6 +223,8 @@ extern "C" {
 #[allow(unused_assignments)]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     libafl_last_seen_edge_idx = *guard;
+    libafl_path_edge_idxs[libafl_path_filled as usize] = *guard;
+    libafl_path_filled += 1;
 
     #[allow(unused_mut)]
     let mut pos = *guard as usize;
@@ -274,6 +278,8 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
     if EDGES_MAP_PTR.is_null() {
         EDGES_MAP_PTR = EDGES_MAP.as_mut_ptr();
     }
+
+    libafl_path_filled = 0;
 
     if start == stop { //|| *start != 0 {
         return;

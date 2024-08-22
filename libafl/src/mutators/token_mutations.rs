@@ -610,7 +610,7 @@ impl I2SRandReplace
             };
 
             if success { 
-                println!("CmpLog managed to replace at edge {edge} with cmpval {:?}", cmp_val);
+                // println!("CmpLog managed to replace at edge {edge} with cmpval {:?}", cmp_val);
                 return Ok(MutationResult::Mutated); 
             }
         }
@@ -633,7 +633,7 @@ where
 
         if state.rand_mut().below(2) == 1 {
             let res = self.targeted_replace(state, input)?;
-            // if there were no exxact matches fall back to standard cmplog
+            // if there were no exact matches fall back to standard cmplog
             if res == MutationResult::Mutated { return Ok(res); }
         }
 

@@ -8,7 +8,7 @@ use core::{
 
 use c2rust_bitfields::BitfieldStruct;
 use hashbrown::{HashMap, HashSet};
-use libafl_bolts::{dataflow_metadata::TestcaseDataflowMetadata, ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
+use libafl_bolts::{dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{corpus::Corpus, executors::ExitKind, inputs::UsesInput, observers::Observer, prelude::MapNeighboursFeedbackMetadata, state::HasCorpus, Error, HasMetadata};
@@ -257,7 +257,7 @@ where
             let idx = state.corpus().current().unwrap();
             let tc = state.corpus().get(idx).unwrap().borrow();
 
-            tc.metadata_map().get::<TestcaseDataflowMetadata>()
+            tc.metadata_map().get::<TestcaseDirectNeighboursMetadata>()
                 .map(|meta| {
                     let res: HashSet<usize> = meta.direct_neighbours_for_edge
                         .iter()

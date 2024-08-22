@@ -11,7 +11,7 @@ use core::{
 };
 
 // #[rustversion::nightly]
-use libafl_bolts::AsSlice;
+use libafl_bolts::{dataflow_metadata::{libafl_path_edge_idxs, libafl_path_filled, TestcaseDirectNeighboursMetadata}, AsSlice};
 use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef},
     AsIter, HasRefCnt, Named
@@ -613,7 +613,7 @@ where
             let _now = Instant::now();
 
             let coverage_map = history_map.to_vec();
-            let _map_filled_set = history_map.iter()
+            let map_filled_set = history_map.iter()
                 .enumerate()
                 .filter(|(_idx,val)| **val != T::default())
                 .map(|(idx,_)| idx)
@@ -633,6 +633,13 @@ where
                     if neighbour_idx > coverage_map.len() ||  coverage_map[neighbour_idx] == T::default() {
                         direct_neighbours.insert(neighbour_idx);
                     }
+                }
+
+                unsafe {
+                    let dn_meta = cfg_metadata.direct_neighbours_for_edges_in_path(
+                        &libafl_path_edge_idxs[0..libafl_path_filled as usize], &map_filled_set
+                    );
+                    testcase.add_metadata(dn_meta);
                 }
 
                 let meta = MapUncoveredNeighboursMetadata { 
