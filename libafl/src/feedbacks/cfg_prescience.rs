@@ -966,7 +966,7 @@ impl ControlFlowGraph {
         }
         
         if !sought_stack.is_empty() {
-            println!("Failed to find successors from the following stack: {:?} in {:?}", sought_stack, path_cov_map_idxs);
+            println!("Failed to find successors from the following stack: {:?}, path_len: {}", sought_stack, path_cov_map_idxs.len());
         }
 
         let direct_neighbours_for_edge = neighbours_info.into_iter().map(|(parent,children)| {

@@ -152,8 +152,6 @@ where
         E::State: HasCorpus + HasSolutions + HasExecutions,
         E::Input: HasMutatorBytes,
     {
-        self.executor.run_target(fuzzer, state, manager, input)?;
-
         let buf = self.dfsan_labels_map.as_slice_mut();
         buf[0] = labels.len() as u8;
         let mut pos = 1;
@@ -230,6 +228,8 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.input().as_ref().unwrap().clone()
         };
+
+        self.executor.run_target(fuzzer, state, manager, &input)?;
     
         fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
             let mut labels = vec![];
@@ -441,8 +441,8 @@ where
 
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
-            let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
-            let covered_indexes = covered_meta.list.clone();
+            // let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
+            // let covered_indexes = covered_meta.list.clone();
 
             let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
                 tc.metadata::<TestcaseDirectNeighboursMetadata>().unwrap().direct_neighbours_for_edge.clone()
@@ -452,7 +452,8 @@ where
             // sorted_all.sort();
             // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
 
-            let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
+            // let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
+            let required_edges: Vec<usize> = direct_neighbours_for_edge.keys().copied().collect();
             let bytes_depended_on_by_edge = self.get_bytes_depended_on_by_edges(
                 fuzzer, executor, state, manager, &required_edges)?;
 
