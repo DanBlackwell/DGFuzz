@@ -223,8 +223,10 @@ extern "C" {
 #[allow(unused_assignments)]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     libafl_last_seen_edge_idx = *guard;
-    libafl_path_edge_idxs[libafl_path_filled as usize] = *guard;
-    libafl_path_filled += 1;
+    if (libafl_path_filled as usize) < libafl_path_edge_idxs.len() {
+        libafl_path_edge_idxs[libafl_path_filled as usize] = *guard;
+        libafl_path_filled += 1;
+    }
 
     #[allow(unused_mut)]
     let mut pos = *guard as usize;

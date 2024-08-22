@@ -13,7 +13,7 @@ crate::impl_serdeany!(FuzzerDataflowMetadata);
 
 #[no_mangle]
 /// array of edge indexes covered by the current input
-pub static mut libafl_path_edge_idxs: [u32; 16 * 1024 * 1024] = [0; 16 * 1024 * 1024];
+pub static mut libafl_path_edge_idxs: [u32; 32 * 1024 * 1024] = [0; 32 * 1024 * 1024];
 #[no_mangle]
 /// current position in `libafl_path_edge_idxs`
 pub static mut libafl_path_filled: u32 = 0;
