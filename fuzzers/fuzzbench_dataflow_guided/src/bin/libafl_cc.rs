@@ -30,6 +30,8 @@ pub fn main() {
             .need_libafl_arg(true)
             .add_arg("-mllvm")
             .add_arg("-simplifycfg-branch-fold-threshold=0")
+            .add_arg("-fno-inline-functions")
+            .add_arg("-fPIC")
             .parse_args(&args)
             .expect("Failed to parse the command line")
             .link_staticlib(&dir, "fuzzbench")

@@ -274,7 +274,15 @@ impl ToolWrapper for ClangWrapper {
 
         new_args.push("-g".into());
         if self.optimize {
-            new_args.push("-O3".into());
+            let mut optimisation_set = false;
+            for arg in args {
+                if arg.as_ref().starts_with("-O") {
+                    optimisation_set = true;
+                }
+            }
+            if !optimisation_set {
+                new_args.push("-O3".into());
+            }
             new_args.push("-funroll-loops".into());
         }
 

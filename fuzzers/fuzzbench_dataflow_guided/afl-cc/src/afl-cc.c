@@ -660,6 +660,7 @@ void compiler_mode_by_callname(aflcc_state_t *aflcc) {
     insert_param(aflcc, "-dfsan-combine-pointer-labels-on-store=true");
     insert_param(aflcc, "-mllvm");
     insert_param(aflcc, "-simplifycfg-branch-fold-threshold=0");
+    insert_param(aflcc, "-fno-inline-functions");
 
   }
 
