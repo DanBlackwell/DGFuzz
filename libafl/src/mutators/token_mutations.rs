@@ -582,6 +582,44 @@ impl I2SRandReplace
             res
         };
 
+        let mut swap_vec = swap_vec.to_owned();
+        if swap_vec.len() <= 8 {
+            let rand = state.rand_mut().below(4);
+
+            // 50% chance to copy exact, 25% chance to +1 or -1 (to deal with > or < comparisons)
+            if rand > 1 {
+                let mut num_val = if rev {
+                    // assume we're on a little endian machine and unsigned (sorry)
+                    let mut tmp = swap_vec.clone();
+                    while tmp.len() < 8 { tmp.insert(0, 0); }
+                    u64::from_be_bytes(tmp.try_into().unwrap())
+                } else {
+                    let mut tmp = swap_vec.clone();
+                    while tmp.len() < 8 { tmp.push(0); }
+                    u64::from_le_bytes(tmp.try_into().unwrap())
+                };
+
+                if rand == 2 {
+                    num_val += 1;
+                } else {
+                    num_val -= 1;
+                }
+
+                // let og = swap_vec.clone();
+
+                swap_vec = if rev {
+                    num_val.to_be_bytes()[(8 - swap_vec.len())..].to_vec()
+                } else {
+                    num_val.to_le_bytes()[0..swap_vec.len()].to_vec()
+                };
+
+                // println!("{} {num_val} turning {:?} into {:?}", 
+                //     if rand == 2 { "added 1 to" } else { "subtracted 1 from" },
+                //     og, swap_vec
+                // );
+            }
+        }
+
         // if swap_vec.len() > 2 {
         //     println!("Swapping in {:?} in place of {:?} ({:?}, {:?}) at positions {:?}", swap_vec, byte_vals, cmp1, cmp2, byte_positions);
         // }

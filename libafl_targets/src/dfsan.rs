@@ -103,11 +103,11 @@ where
 
         // Create an observation channel using the hitcounts map of AFL++
         let edges_observer = HitcountsMapObserver::new(
-            StdMapObserver::from_ownedref("edges_map", cov_map_slice)
+            StdMapObserver::from_ownedref("dfsan_edges_map", cov_map_slice)
         );
 
         // Create an observation channel to keep track of the execution time
-        let time_observer = TimeObserver::new("time");
+        let time_observer = TimeObserver::new("dfsan_time");
     
         let mut fs_builder = ForkserverExecutor::builder()
             .program(dfsan_binary_path)
