@@ -1,6 +1,8 @@
 //! Tokens are what AFL calls extras or dictionaries.
 //! They may be inserted as part of mutations during fuzzing.
 use alloc::{borrow::Cow, vec::Vec};
+use memchr::memmem;
+use num_traits::ToBytes;
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use core::slice::from_raw_parts;
 use core::{
@@ -433,12 +435,7 @@ impl I2SRandReplace
             return Ok(MutationResult::Skipped);
         }
 
-        // let full_neighbours_meta = state
-        //     .metadata::<MapNeighboursFeedbackMetadata>()
-        //     .unwrap();
-
-        // let covered_blocks = full_neighbours_meta.covered_blocks.clone();
-        let mut edges_bytes_and_cmp_vals = {
+        let byte_vals_and_cmp_vals = {
             let mut res = vec![];
 
             let curr_idx = state.corpus().current().unwrap();
@@ -450,172 +447,152 @@ impl I2SRandReplace
                 let Some(cmpvals) = cmp_meta.map.get(edge) else { continue; };
                 if cmpvals.is_empty() { continue; }
 
+                let byte_vals: Vec<u8> = {
+                    let buf = input.bytes();
+                    bytes.iter().map(|&pos| buf[pos]).collect()
+                };
+
                 // println!("Found cmpvals and byte-dependency map for {edge}");
 
-                let same_len_cmpvals: Vec<CmpValues> = cmpvals.into_iter().filter(|&c| {
-                        let exact_len = match bytes.len() {
-                            1 => match c { CmpValues::U8(_) => true, _ => false },
-                            2 => match c { CmpValues::U16(_) => true, _ => false },
-                            4 => match c { CmpValues::U32(_) => true, _ => false },
-                            8 => match c { CmpValues::U64(_) => true, _ => false },
-                            _ => false
+                let potential_subs = cmpvals.into_iter()
+                    .map(|c| {
+                        // convert to vecs
+                        let (buf1, buf2) = match c {
+                            // makes no sense to strip u8 or u16s
+                            CmpValues::U8(v) => return (vec![v.0], vec![v.1]),
+                            CmpValues::U16(v) => return (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                            CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                            CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                            CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
                         };
 
-                        exact_len || match c {
-                            CmpValues::Bytes(v) => v.0.len() == bytes.len(),
-                            _ => false                        
+                        // strip leading and trailing sign bytes (0 for positive 0xFF for negative)
+                        let mut start = 0;
+                        for idx in 0..buf1.len() {
+                            start = idx;
+                            if (buf1[idx] != 0 && buf1[idx] != 0xFF) || buf1[idx] != buf2[idx] {
+                                break;
+                            }
+                        }
+                        let mut end = buf1.len();
+                        let mut idx = buf1.len() - 1;
+                        loop {
+                            if (buf1[idx] == 0 || buf1[idx] == 0xFF) && buf1[idx] == buf2[idx] {
+                                end = idx;
+                            } else {
+                                break;
+                            }
+
+                            if idx == 0 { break; } else { idx -= 1; }
+                        }
+
+                        // println!("stripping {:?} to range {start}..{end}", c);
+                        if start < end {
+                            (buf1[start..end].to_vec(), buf2[start..end].to_vec())
+                        } else {
+                            (vec![], vec![])
                         }
                     })
-                    .cloned()
-                    .collect();
+                    .filter(|(buf1, buf2)| {
+                        if buf1.is_empty() 
+                            || buf1.len() > byte_vals.len() 
+                            || *buf1 == *buf2 { 
+                                return false; 
+                        }
 
-                for cmpval in same_len_cmpvals {
-                    // println!("  found cmpval {:?} with same length for edge {edge} (on bytes {:?}", cmpval, bytes);
-                    res.push((*edge, bytes.to_owned(), cmpval));
+                        // check if we have a match between the cmpval and our dependent bytes
+                        if memmem::find(&byte_vals, &buf1).is_some() || 
+                            memmem::find(&byte_vals, &buf2).is_some() 
+                        {
+                            return true;
+                        }
+
+                        let mut rev = byte_vals.clone();
+                        rev.reverse();
+                        memmem::find(&rev, &buf1).is_some() || 
+                            memmem::find(&rev, &buf2).is_some()
+                    });
+
+                for substitution in potential_subs {
+                    res.push((bytes.to_owned(), byte_vals.to_owned(), substitution));
                 }
             }
             res
         };
 
-        if edges_bytes_and_cmp_vals.is_empty() { return Ok(MutationResult::Skipped); }
+        // println!("bytes, byte_vals, substitions: {:?}", byte_vals_and_cmp_vals);
+        if byte_vals_and_cmp_vals.is_empty() { return Ok(MutationResult::Skipped); }
 
+        // pick one edge at random to apply the replacement to
+        let chosen_idx = state.rand_mut().below(byte_vals_and_cmp_vals.len());
+        let (bytes_pos, byte_vals, (cmp1, cmp2)) = &byte_vals_and_cmp_vals[chosen_idx];
+
+        // populate a complete list of matches for this cmpval in this edges dependent bytes
+        let mut matches = vec![];
+
+        let reversed = { 
+            let mut rev = byte_vals.clone();
+            rev.reverse();
+            rev
+        };
+
+        // collect up matches for cmpval side 1
+        let mut finder = memmem::Finder::new(cmp1);
+        matches.append(
+            &mut finder.find_iter(byte_vals)
+                .map(|idx| (cmp2, false, idx))
+                .collect::<Vec<(&Vec<u8>, bool, usize)>>()
+        );
+        matches.append(
+            &mut finder.find_iter(&reversed)
+                .map(|idx| (cmp2, true, idx))
+                .collect::<Vec<(&Vec<u8>, bool, usize)>>()
+        );
+
+        // collect up matches for cmpval side 2
+        finder = memmem::Finder::new(cmp2);
+        matches.append(
+            &mut finder.find_iter(byte_vals)
+                .map(|idx| (cmp1, false, idx))
+                .collect::<Vec<(&Vec<u8>, bool, usize)>>()
+        );
+        matches.append(
+            &mut finder.find_iter(&reversed)
+                .map(|idx| (cmp1, true, idx))
+                .collect::<Vec<(&Vec<u8>, bool, usize)>>()
+        );
+
+        // pick one match at random
+        let match_idx = state.rand_mut().below(matches.len());
+        let (swap_vec, rev, start_idx) = matches[match_idx]; 
+        // Figure out what indexes of the input need swapping
+        let byte_positions = if rev {
+            let mut bytes_pos = bytes_pos.to_owned();
+            bytes_pos.reverse();
+            let mut res = vec![];
+            for idx in start_idx..(start_idx + swap_vec.len()) {
+                res.push(bytes_pos[idx]);
+            }
+            res
+        } else {
+            let mut res = vec![];
+            for idx in start_idx..(start_idx + swap_vec.len()) {
+                res.push(bytes_pos[idx]);
+            }
+            res
+        };
+
+        // if swap_vec.len() > 2 {
+        //     println!("Swapping in {:?} in place of {:?} ({:?}, {:?}) at positions {:?}", swap_vec, byte_vals, cmp1, cmp2, byte_positions);
+        // }
+
+        // populate the input with the cmpval bytes
         let bytes = input.bytes_mut();
-
-        // shuffle them
-        {
-            let n = edges_bytes_and_cmp_vals.len();
-            for i in 0..(n - 1) {
-                // Generate random index j, such that: i <= j < n
-                // The remainder (`%`) after division is always less than the divisor.
-                let j = state.rand_mut().below(n - i) + i;
-                edges_bytes_and_cmp_vals.swap(i, j);
-            }
+        for (cmp_idx, input_idx) in byte_positions.into_iter().enumerate() {
+            bytes[input_idx] = swap_vec[cmp_idx];
         }
-
-        for (edge, byte_idxs, cmp_val) in edges_bytes_and_cmp_vals {
-            let success = match cmp_val.clone() {
-                CmpValues::U8(v) => {
-                    if bytes[byte_idxs[0]] == v.0 {
-                        bytes[byte_idxs[0]] = v.1;
-                        true
-                    } else if bytes[byte_idxs[0]] == v.1 {
-                        bytes[byte_idxs[0]] = v.0;
-                        true
-                    } else {
-                        false
-                    }
-                },
-                CmpValues::U16(v) => {
-                    let val =
-                        u16::from_be_bytes([bytes[byte_idxs[0]], bytes[byte_idxs[1]]]);
-                    if val == v.0 {
-                        for (idx, val) in v.0.to_be_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val.swap_bytes() == v.0 {
-                        for (idx, val) in v.0.to_le_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val == v.1 {
-                        for (idx, val) in v.1.to_be_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val.swap_bytes() == v.1 {
-                        for (idx, val) in v.1.to_le_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                },
-                CmpValues::U32(v) => {
-                    let val =
-                        u32::from_be_bytes([
-                            bytes[byte_idxs[0]], bytes[byte_idxs[1]], bytes[byte_idxs[2]], bytes[byte_idxs[3]]
-                        ]);
-                    if val == v.0 {
-                        for (idx, val) in v.0.to_be_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val.swap_bytes() == v.0 {
-                        for (idx, val) in v.0.to_le_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val == v.1 {
-                        for (idx, val) in v.1.to_be_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val.swap_bytes() == v.1 {
-                        for (idx, val) in v.1.to_le_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                },
-                CmpValues::U64(v) => {
-                    let val =
-                        u64::from_be_bytes([
-                            bytes[byte_idxs[0]], bytes[byte_idxs[1]], bytes[byte_idxs[2]], bytes[byte_idxs[3]],
-                            bytes[byte_idxs[4]], bytes[byte_idxs[5]], bytes[byte_idxs[6]], bytes[byte_idxs[7]]
-                        ]);
-                    if val == v.0 {
-                        for (idx, val) in v.0.to_be_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val.swap_bytes() == v.0 {
-                        for (idx, val) in v.0.to_le_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val == v.1 {
-                        for (idx, val) in v.1.to_be_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if val.swap_bytes() == v.1 {
-                        for (idx, val) in v.1.to_le_bytes().iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                },
-                CmpValues::Bytes(v) => {
-                    let byte_vals: Vec<u8> = byte_idxs.iter().map(|&idx| bytes[idx]).collect();
-                    if byte_vals == v.0 {
-                        for (idx, val) in v.0.iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else if byte_vals == v.1 {
-                        for (idx, val) in v.1.iter().enumerate() {
-                            bytes[byte_idxs[idx]] = *val;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                }
-            };
-
-            if success { 
-                // println!("CmpLog managed to replace at edge {edge} with cmpval {:?}", cmp_val);
-                return Ok(MutationResult::Mutated); 
-            }
-        }
-
-        Ok(MutationResult::Skipped)
+        
+        Ok(MutationResult::Mutated)
     }
 }
 

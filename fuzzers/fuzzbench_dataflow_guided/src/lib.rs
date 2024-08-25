@@ -93,7 +93,7 @@ pub extern "C" fn libafl_main() {
                 .help(
                     "The backoff factor for each neighbour (backoff_factor ^ (num_execs / 1_000))",
                 )
-                .default_value("1.0"),
+                .default_value("0.9999"),
         )
         .arg(
             Arg::new("dfsan_binary")
