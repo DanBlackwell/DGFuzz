@@ -1,21 +1,23 @@
 //! The `CmpObserver` provides access to the logged values of CMP instructions
 
 use alloc::{borrow::Cow, vec::Vec};
+use memchr::memmem;
 use core::{
     fmt::Debug,
-    marker::PhantomData,
+    marker::PhantomData, str::Bytes,
 };
+use std::borrow::ToOwned;
 
 use c2rust_bitfields::BitfieldStruct;
 use hashbrown::{HashMap, HashSet};
 use libafl_bolts::{dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{corpus::Corpus, executors::ExitKind, inputs::UsesInput, observers::Observer, prelude::MapNeighboursFeedbackMetadata, state::HasCorpus, Error, HasMetadata};
+use crate::{corpus::Corpus, executors::ExitKind, inputs::{BytesInput, HasMutatorBytes, UsesInput}, observers::Observer, state::HasCorpus, Error, HasMetadata};
 
 /// Generic metadata trait for use in a `CmpObserver`, which adds comparisons from a `CmpObserver`
 /// primarily intended for use with `AFLppCmpValuesMetadata` or `CmpValuesMetadata`
-pub trait CmpObserverMetadata<'a, CM>: SerdeAny + Debug
+pub trait CmpObserverMetadata<'a, CM, S>: SerdeAny + Debug + Clone
 where
     CM: CmpMap + Debug,
 {
@@ -31,7 +33,7 @@ where
     /// Add comparisons to a metadata from a `CmpObserver`. `cmp_map` is mutable in case
     /// it is needed for a custom map, but this is not utilized for `CmpObserver` or
     /// `AFLppCmpLogObserver`.
-    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, cmp_observer_data: Self::Data, unseen_edge_parents: Option<HashSet<usize>>);
+    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, cmp_observer_data: Self::Data, state: &S);
 }
 
 /// Compare values collected during a run
@@ -72,8 +74,30 @@ impl CmpValues {
     }
 }
 
+
 /// A state metadata holding a list of values logged from comparisons
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    any(not(feature = "serdeany_autoreg"), miri),
+    allow(clippy::unsafe_derive_deserialize)
+)] // for SerdeAny
+pub struct TargetedCmpValReplace {
+    /// A `list` of indexes to be replaced.
+    #[serde(skip)]
+    pub input_byte_indexes: Vec<usize>,
+    /// A `list` of the current values (to be replaced)
+    #[serde(skip)]
+    pub input_byte_values: Vec<u8>,
+    /// A `list` of the replacement values
+    #[serde(skip)]
+    pub replacement_byte_values: Vec<u8>,
+    /// Did we have to reverse this?
+    #[serde(skip)]
+    pub is_little_endian: bool,
+}
+
+/// A state metadata holding a list of values logged from comparisons
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
     allow(clippy::unsafe_derive_deserialize)
@@ -85,6 +109,9 @@ pub struct CmpValuesMetadata {
     /// A `HashMap` from prev_edge_idx to list of `CmpValues`
     #[serde(skip)]
     pub map: HashMap<usize, Vec<CmpValues>>,
+    /// A `list` of possible DFSan targeted replacements
+    #[serde(skip)]
+    pub targeted_replacements: Vec<TargetedCmpValReplace>,
 }
 
 libafl_bolts::impl_serdeany!(CmpValuesMetadata);
@@ -106,13 +133,138 @@ impl CmpValuesMetadata {
     /// Creates a new [`struct@CmpValuesMetadata`]
     #[must_use]
     pub fn new() -> Self {
-        Self { list: vec![], map: HashMap::new() }
+        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![] }
+    }
+
+    fn populate_targeted_replacements<S>(&mut self, state: &S)
+    where
+        S: HasMetadata + HasCorpus,
+        S::Input: HasMutatorBytes,
+    {
+        if self.list.is_empty() { return; }
+
+        let curr_idx = state.corpus().current().unwrap();
+        let tc = state.corpus().get(curr_idx).unwrap().borrow();
+        let df_meta = tc.metadata_map().get::<TestcaseDataflowMetadata>().unwrap();
+        let input = tc.input().as_ref().unwrap();
+
+        for (edge, byte_indexes) in &df_meta.bytes_depended_on_by_edge {
+            if byte_indexes.is_empty() { continue; }
+            let Some(cmpvals) = self.map.get(edge) else { continue; };
+            if cmpvals.is_empty() { continue; }
+
+            // println!("Found cmpvals and byte-dependency map for {edge}");
+
+            let trimmed_cmps = cmpvals.into_iter()
+                .map(|c| {
+                    // convert to vecs
+                    let (buf1, buf2) = match c {
+                        // makes no sense to strip u8 or u16s
+                        CmpValues::U8(v) => return (vec![v.0], vec![v.1]),
+                        CmpValues::U16(v) => return (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
+                    };
+
+                    // strip leading and trailing zeroes
+                    let mut start = 0;
+                    for idx in 0..buf1.len() {
+                        start = idx;
+                        if buf1[idx] != 0 || buf1[idx] != buf2[idx] {
+                            break;
+                        }
+                    }
+                    let mut end = buf1.len();
+                    let mut idx = buf1.len() - 1;
+                    loop {
+                        if buf1[idx] != 0 && buf1[idx] != buf2[idx] {
+                            break;
+                        }
+                        end = idx;
+
+                        if idx == 0 { break; } else { idx -= 1; }
+                    }
+
+                    // println!("stripping {:?} to range {start}..{end}", c);
+                    if start < end {
+                        (buf1[start..end].to_vec(), buf2[start..end].to_vec())
+                    } else {
+                        (vec![], vec![])
+                    }
+                });
+
+            let byte_vals: Vec<u8> = {
+                let buf = input.bytes();
+                byte_indexes.iter().map(|&pos| buf[pos]).collect()
+            };
+
+            // populate a complete list of matches for this cmpval in this edges dependent bytes
+            for (cmp1, cmp2) in trimmed_cmps {
+                // skip empty replacements
+                if cmp1.is_empty() { continue; }
+
+                // collect up matches for cmpval side 1
+                self.targeted_replacements.append(
+                    &mut memmem::find_iter(&byte_vals, &cmp1)
+                        .map(|idx| TargetedCmpValReplace {
+                            input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                            replacement_byte_values: cmp2.clone(),
+                            is_little_endian: false
+                        })
+                        .collect::<Vec<TargetedCmpValReplace>>()
+                );
+                // if it's 1 byte long we'll match it either direction
+                if cmp1.len() > 1 {
+                    let rev = {let mut x = cmp1.clone(); x.reverse(); x};
+                    self.targeted_replacements.append(
+                        &mut memmem::find_iter(&byte_vals, &rev)
+                            .map(|idx| TargetedCmpValReplace {
+                                input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                                input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                replacement_byte_values: rev.clone(),
+                                is_little_endian: true
+                            })
+                            .collect::<Vec<TargetedCmpValReplace>>()
+                    );
+                }
+
+                // collect up matches for cmpval side 2
+                self.targeted_replacements.append(
+                    &mut memmem::find_iter(&byte_vals, &cmp2)
+                        .map(|idx| TargetedCmpValReplace {
+                            input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                            replacement_byte_values: cmp1.clone(),
+                            is_little_endian: false
+                        })
+                        .collect::<Vec<TargetedCmpValReplace>>()
+                );
+                // if it's 1 byte long we'll match it either direction
+                if cmp1.len() > 1 {
+                    let rev = {let mut x = cmp2.clone(); x.reverse(); x};
+                    self.targeted_replacements.append(
+                        &mut memmem::find_iter(&byte_vals, &rev)
+                            .map(|idx| TargetedCmpValReplace {
+                                input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                                input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                replacement_byte_values: rev.clone(),
+                                is_little_endian: true
+                            })
+                            .collect::<Vec<TargetedCmpValReplace>>()
+                    );
+                }
+            }
+        }
     }
 }
 
-impl<'a, CM> CmpObserverMetadata<'a, CM> for CmpValuesMetadata
+impl<'a, CM, S> CmpObserverMetadata<'a, CM, S> for CmpValuesMetadata
 where
     CM: CmpMap,
+        S: HasMetadata + HasCorpus,
+        S::Input: HasMutatorBytes,
 {
     type Data = bool;
 
@@ -121,9 +273,11 @@ where
         Self::new()
     }
 
-    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data, unseen_edge_parents: Option<HashSet<usize>>) {
+    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data, state: &S) 
+    {
         self.list.clear();
         self.map.clear();
+        self.targeted_replacements.clear();
         let count = usable_count;
         for i in 0..count {
             let execs = cmp_map.usable_executions_for(i);
@@ -168,14 +322,6 @@ where
                     }
                 }
 
-                // if we have a list of parents of unseen edges, and prev_edge isn't one of them,
-                // don't store these Cmps
-                // if unseen_edge_parents.as_ref().is_some_and(|e| {
-                //     !e.contains(&cmp_map.prev_edge_index_for(i))
-                // }) {
-                //     continue;
-                // }
-
                 if !self.map.contains_key(&cmp_map.prev_edge_index_for(i)) {
                     self.map.insert(cmp_map.prev_edge_index_for(i), vec![]);
                 }
@@ -191,6 +337,8 @@ where
                 }
             }
         }
+
+        self.populate_targeted_replacements(state);
     }
 }
 
@@ -226,7 +374,7 @@ pub trait CmpObserver<'a, CM, S, M>: Observer<S>
 where
     CM: CmpMap,
     S: UsesInput,
-    M: CmpObserverMetadata<'a, CM>,
+    M: CmpObserverMetadata<'a, CM, S>,
 {
     /// Get the number of usable cmps (all by default)
     fn usable_count(&self) -> usize;
@@ -248,41 +396,16 @@ where
     where
         S: HasMetadata + HasCorpus,
     {
-        let unseen_edge_parents = state
-                .metadata_map()
-                .get::<MapNeighboursFeedbackMetadata>()
-                .map(|full_neighbours_meta| {
-            let covered_blocks = &full_neighbours_meta.covered_blocks;
-
-            let idx = state.corpus().current().unwrap();
-            let tc = state.corpus().get(idx).unwrap().borrow();
-
-            tc.metadata_map().get::<TestcaseDirectNeighboursMetadata>()
-                .map(|meta| {
-                    let res: HashSet<usize> = meta.direct_neighbours_for_edge
-                        .iter()
-                        .filter(|(_parent, neighbours)| {
-                            for neighbour in *neighbours {
-                                if !covered_blocks.contains(neighbour) {
-                                    return true;
-                                }
-                            }
-                            false
-                        })
-                        .map(|(parent, _)| *parent)
-                        .collect();
-                    res
-                })
-        });
-        let unseen_edge_parents = unseen_edge_parents.unwrap_or(None);
-
-        #[allow(clippy::option_if_let_else)] // we can't mutate state in a closure
-        let meta = state.metadata_or_insert_with(|| M::new_metadata());
+        let mut meta = state.metadata_map_mut().remove::<M>()
+            .map_or_else(|| M::new_metadata(), |x| *x);
+        // let mut meta = M::new_metadata();
 
         let usable_count = self.usable_count();
         let cmp_observer_data = self.cmp_observer_data();
 
-        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data, unseen_edge_parents);
+        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data, state);
+
+        state.add_metadata(meta);
     }
 }
 
@@ -293,7 +416,7 @@ pub struct StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize,
     S: UsesInput + HasMetadata + HasCorpus,
-    M: CmpObserverMetadata<'a, CM>,
+    M: CmpObserverMetadata<'a, CM, S>,
 {
     cmp_map: OwnedRefMut<'a, CM>,
     size: Option<OwnedRefMut<'a, usize>>,
@@ -307,7 +430,7 @@ impl<'a, CM, S, M> CmpObserver<'a, CM, S, M> for StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
     S: UsesInput + Debug + HasMetadata + HasCorpus,
-    M: CmpObserverMetadata<'a, CM>,
+    M: CmpObserverMetadata<'a, CM, S>,
 {
     /// Get the number of usable cmps (all by default)
     fn usable_count(&self) -> usize {
@@ -325,8 +448,8 @@ where
         self.cmp_map.as_mut()
     }
 
-    fn cmp_observer_data(&self) -> <M as CmpObserverMetadata<'a, CM>>::Data {
-        <M as CmpObserverMetadata<CM>>::Data::default()
+    fn cmp_observer_data(&self) -> <M as CmpObserverMetadata<'a, CM, S>>::Data {
+        <M as CmpObserverMetadata<CM, S>>::Data::default()
     }
 }
 
@@ -334,7 +457,7 @@ impl<'a, CM, S, M> Observer<S> for StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
     S: UsesInput + Debug + HasMetadata + HasCorpus,
-    M: CmpObserverMetadata<'a, CM>,
+    M: CmpObserverMetadata<'a, CM, S>,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         self.cmp_map.as_mut().reset()?;
@@ -358,7 +481,7 @@ impl<'a, CM, S, M> Named for StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
     S: UsesInput + HasMetadata + HasCorpus,
-    M: CmpObserverMetadata<'a, CM>,
+    M: CmpObserverMetadata<'a, CM, S>,
 {
     fn name(&self) -> &Cow<'static, str> {
         &self.name
@@ -369,7 +492,7 @@ impl<'a, CM, S, M> StdCmpObserver<'a, CM, S, M>
 where
     CM: CmpMap + Serialize + DeserializeOwned,
     S: UsesInput + HasMetadata + HasCorpus,
-    M: CmpObserverMetadata<'a, CM>,
+    M: CmpObserverMetadata<'a, CM, S>,
 {
     /// Creates a new [`StdCmpObserver`] with the given name and map.
     #[must_use]
@@ -502,7 +625,7 @@ struct cmp_map {
 */
 
 /// A state metadata holding a list of values logged from comparisons. AFL++ RQ version.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
     allow(clippy::unsafe_derive_deserialize)

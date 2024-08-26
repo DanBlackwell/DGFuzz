@@ -1,12 +1,16 @@
 use alloc::{borrow::Cow, vec::Vec};
-use hashbrown::HashSet;
 use core::{fmt::Debug, marker::PhantomData};
+use hashbrown::HashSet;
 
 use libafl::{
-    executors::ExitKind, inputs::UsesInput, observers::{
+    executors::ExitKind,
+    inputs::UsesInput,
+    observers::{
         cmp::{AFLppCmpValuesMetadata, CmpMap, CmpObserver, CmpObserverMetadata, CmpValues},
         Observer,
-    }, state::HasCorpus, Error, HasMetadata
+    },
+    state::HasCorpus,
+    Error, HasMetadata,
 };
 use libafl_bolts::{ownedref::OwnedRefMut, Named};
 use serde::{Deserialize, Serialize};
@@ -68,7 +72,7 @@ pub struct AFLppCmpLogObserver<'a, S> {
     size: Option<OwnedRefMut<'a, usize>>,
     name: Cow<'static, str>,
     add_meta: bool,
-    original: <AFLppCmpValuesMetadata as CmpObserverMetadata<'a, AFLppCmpLogMap>>::Data,
+    original: <AFLppCmpValuesMetadata as CmpObserverMetadata<'a, AFLppCmpLogMap, S>>::Data,
     phantom: PhantomData<S>,
 }
 
@@ -95,7 +99,7 @@ where
 
     fn cmp_observer_data(
         &self,
-    ) -> <AFLppCmpValuesMetadata as CmpObserverMetadata<'a, AFLppCmpLogMap>>::Data {
+    ) -> <AFLppCmpValuesMetadata as CmpObserverMetadata<'a, AFLppCmpLogMap, S>>::Data {
         self.original
     }
 
@@ -106,7 +110,7 @@ where
         S: HasMetadata,
     {
         #[allow(clippy::option_if_let_else)] // we can't mutate state in a closure
-        let meta = if let Some(meta) = state.metadata_map_mut().get_mut::<AFLppCmpValuesMetadata>()
+        let mut meta = if let Some(meta) = state.metadata_map_mut().get_mut::<AFLppCmpValuesMetadata>()
         {
             meta
         } else {
@@ -115,7 +119,7 @@ where
                 .metadata_map_mut()
                 .get_mut::<AFLppCmpValuesMetadata>()
                 .unwrap()
-        };
+        }.clone();
 
         if self.original {
             // If this observer is for original input, then we have run the un-mutated input
@@ -131,7 +135,9 @@ where
         let usable_count = self.usable_count();
         let cmp_observer_data = self.cmp_observer_data();
 
-        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data, None);
+        meta.add_from(usable_count, self.cmp_map_mut(), cmp_observer_data, state);
+
+        state.add_metadata(meta);
     }
 }
 
@@ -219,7 +225,7 @@ impl<'a, S> AFLppCmpLogObserver<'a, S> {
     }
 }
 
-impl<'a> CmpObserverMetadata<'a, AFLppCmpLogMap> for AFLppCmpValuesMetadata {
+impl<'a, S> CmpObserverMetadata<'a, AFLppCmpLogMap, S> for AFLppCmpValuesMetadata {
     type Data = bool;
 
     fn new_metadata() -> Self {
@@ -231,7 +237,7 @@ impl<'a> CmpObserverMetadata<'a, AFLppCmpLogMap> for AFLppCmpValuesMetadata {
         usable_count: usize,
         cmp_map: &mut AFLppCmpLogMap,
         cmp_observer_data: Self::Data,
-        _: Option<HashSet<usize>>
+        _: &S,
     ) {
         let count = usable_count;
         for i in 0..count {

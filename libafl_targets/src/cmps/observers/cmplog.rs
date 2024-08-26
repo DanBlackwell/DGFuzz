@@ -6,7 +6,11 @@ use alloc::borrow::Cow;
 use core::fmt::Debug;
 
 use libafl::{
-    executors::ExitKind, inputs::UsesInput, observers::{cmp::CmpValuesMetadata, CmpMap, CmpObserver, Observer}, state::HasCorpus, Error, HasMetadata
+    executors::ExitKind,
+    inputs::{HasMutatorBytes, UsesInput},
+    observers::{cmp::CmpValuesMetadata, CmpMap, CmpObserver, Observer},
+    state::HasCorpus,
+    Error, HasMetadata,
 };
 use libafl_bolts::{ownedref::OwnedMutPtr, Named};
 
@@ -25,6 +29,7 @@ pub struct CmpLogObserver {
 impl<'a, S> CmpObserver<'a, CmpLogMap, S, CmpValuesMetadata> for CmpLogObserver
 where
     S: UsesInput + HasMetadata + HasCorpus,
+    <S as UsesInput>::Input: HasMutatorBytes,
 {
     /// Get the number of usable cmps (all by default)
     fn usable_count(&self) -> usize {
@@ -46,6 +51,7 @@ where
 impl<'a, S> Observer<S> for CmpLogObserver
 where
     S: UsesInput + HasMetadata + HasCorpus,
+    <S as UsesInput>::Input: HasMutatorBytes,
     Self: CmpObserver<'a, CmpLogMap, S, CmpValuesMetadata>,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
