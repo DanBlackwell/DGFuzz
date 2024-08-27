@@ -295,17 +295,27 @@ where
         let mut bytes_depended_on_by_edge = {
             let mut tmp = HashMap::new();
             for e in required_edges {
-                tmp.insert(*e, vec![]);
+                tmp.insert(*e, Vec::with_capacity(50));
             }
             tmp
         };
 
-        let mut queue = vec![(required_edges.to_vec(), 0..input.bytes().len())];
+        let mut stack = vec![(required_edges.to_vec(), 0..input.bytes().len())];
+        // once there are 50 bytes dependent, stop trying to compute more!
+        let mut saturated_conds = HashSet::new();
         // println!("input len: {:?}", input.bytes().len());
 
         // Collect up a list of bytes that each edge depends on; these may be disjoint
         // e.g. if (data[0] + data[3] - data[5] == 0)
-        while let Some((required_edges, byte_range)) = queue.pop() {
+        while let Some((required_edges, byte_range)) = stack.pop() {
+            let mut sats_copy = saturated_conds.clone();
+            let required_edges: Vec<usize> = required_edges.into_iter()
+                .filter(|e| sats_copy.is_empty() || !sats_copy.remove(e))
+                .collect();
+            if required_edges.is_empty() {
+                continue;
+            }
+
             let label_infos = get_labels_for_range(byte_range);
             let edges_for_label = self.run_and_collect_labels(
                 fuzzer,
@@ -322,14 +332,18 @@ where
                 let linfo = label_infos[(label as usize) - 1];
                 if linfo.len == 1 {
                     for edge_idx in edges {
-                        bytes_depended_on_by_edge
+                        let dependent_bytes = bytes_depended_on_by_edge
                             .get_mut(&edge_idx)
-                            .unwrap()
-                            .push(linfo.start_pos);
+                            .unwrap();
+                        if dependent_bytes.len() >= 50 {
+                            saturated_conds.insert(edge_idx);
+                        } else {
+                            dependent_bytes.push(linfo.start_pos);
+                        }
                     }
                 } else {
                     // println!("queueing edges {:?}, {:?}-{:?}", edges, linfo.start_pos, linfo.start_pos + linfo.len);
-                    queue.push((edges, linfo.start_pos..(linfo.start_pos + linfo.len)));
+                    stack.push((edges, linfo.start_pos..(linfo.start_pos + linfo.len)));
                 }
             }
         }
