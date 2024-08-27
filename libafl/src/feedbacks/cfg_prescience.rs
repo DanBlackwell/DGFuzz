@@ -717,7 +717,17 @@ impl ControlFlowGraph {
         input_coverage_map_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>
     ) -> Vec<Reachability> {
+        self.get_all_neighbours_upto_depth(9999, input_coverage_map_indexes, all_coverage_map_indexes)
+    }
 
+    /// Return a set of all indexes reachable from the list of `coverage_map_indexes` and the set
+    /// of called functions
+    pub fn get_all_neighbours_upto_depth(
+        &mut self, 
+        max_depth: usize,
+        input_coverage_map_indexes: &[usize],
+        all_coverage_map_indexes: &HashSet<usize>
+    ) -> Vec<Reachability> {
         let mut dupes = vec![];
         for idx in input_coverage_map_indexes {
             if self.duplicate_cov_map_idxs.contains(&CoverageMapIdx(*idx as u32)) {
@@ -744,6 +754,10 @@ impl ControlFlowGraph {
 
             debug_assert!(covered.contains(&to_explore), "to_explore: {to_explore}, covered: {:?}", covered);
 
+            if depth > max_depth {
+                continue;
+            }
+
             if to_explore >= 10_000_000 {
                 // can't follow an indirect call...
                 continue;
@@ -768,12 +782,6 @@ impl ControlFlowGraph {
                             }
                             let first_edge = edges_in_func[0][0];
                             if let Some(direct_neighbour_ancestor_index) = direct_neighbour_predecessor {
-                                reachable.push(Reachability {
-                                    index: first_edge, 
-                                    // same depth as current - as there's no conditional check required
-                                    depth: depth - 1,
-                                    direct_neighbour_ancestor_index
-                                });
                                 queue.push_back((depth, first_edge, Some(direct_neighbour_ancestor_index)));
                             }
                         }
@@ -796,16 +804,23 @@ impl ControlFlowGraph {
                 }
             }
 
-            for successor in self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned() {
+            let successors = self.successor_cov_map_idxs_for(CoverageMapIdx(to_explore as u32)).to_owned();
+            let single_succ = successors.len() == 1;
+            for successor in successors {
                 let map_idx = successor.0 as usize;
                 if covered.insert(map_idx) {
                     let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(map_idx);
-                    reachable.push(Reachability {
-                        index: map_idx,
-                        depth, 
-                        direct_neighbour_ancestor_index
-                    });
-                    queue.push_back((depth + 1, map_idx, Some(direct_neighbour_ancestor_index)));
+                    // only count the BB just before a fork
+                    if !single_succ {
+                        reachable.push(Reachability {
+                            index: map_idx,
+                            depth,
+                            direct_neighbour_ancestor_index
+                        });
+                    }
+                    queue.push_back(
+                        (if single_succ { depth } else { depth + 1 }, map_idx, Some(direct_neighbour_ancestor_index))
+                    );
                 }
             }
         }
@@ -826,98 +841,6 @@ impl ControlFlowGraph {
 
         called
     }
-
-    // /// Return a map from parent edges to a list of their direct neighbours (descendents)
-    // pub fn get_map_from_edges_to_direct_neighbours(
-    //     &mut self, 
-    //     input_coverage_map_indexes: &[usize],
-    //     all_coverage_map_indexes: &HashSet<usize>,
-    // ) -> HashMap<usize, Vec<usize>> {
-
-    //     let mut neighbours_info = HashMap::new();
-
-    //     // set any indexes we've already covered...
-    //     let mut covered = all_coverage_map_indexes.clone();
-
-    //     for &to_explore in input_coverage_map_indexes {
-    //         let mut children = vec![];
-
-    //         // DO NOT track edges into functions - if these functions are hit,
-    //         // the bb will already be in `input_coverage_map_indexes`; 
-    //         // tracking conditionals beyond the first bb means that the child
-    //         // ends up with the wrong parent (it's actually grandparent) 
-
-    //         // DO NOT add these huge index indirect calls
-    //         // for indirect_call_num in 0..bb.num_indirect_calls {
-
-    //         let bb = &self.all_edges[to_explore];
-    //         for succ_uuid in &bb.successor_uuids {
-    //             let succ_cov_idx = self.edge_with_uuid[succ_uuid];
-    //             let succ_bb = &self.all_edges[succ_cov_idx];
-    //             if let Some(cov_map_idx) = succ_bb.coverage_map_idx {
-    //                 // if covered.insert(cov_map_idx.0 as usize) {
-    //                 if !all_coverage_map_indexes.contains(&(cov_map_idx.0 as usize)) {
-    //                     children.push(cov_map_idx.0 as usize);
-    //                 }
-    //                 // }
-    //             }
-    //         }
-
-    //         if children.is_empty() {
-    //             continue;
-    //         }
-
-    //         if bb.called_funcs.is_empty() {
-    //             neighbours_info.insert(to_explore, children);
-    //         } else {
-    //             // if there's a called function then the actual parent of the successors 
-    //             // will be the block that returns from the last called function.
-    //             // note that this is not an issue when entering functions (or even chaining
-    //             // them), as the entry point is guaranteed to be unique
-    //             let mut parents = HashSet::new();
-    //             let mut handled_funcs = HashSet::new();
-    //             let mut stack = vec![bb.called_funcs.last().unwrap()];
-    //             handled_funcs.insert(stack[0]);
-    //             while let Some(func) = stack.pop() {
-    //                 let Some(edge_lists) = self.edges_in_func_named.get(func) else {
-    //                     continue;
-    //                 };
-    //                 let edges = &edge_lists[0];
-    //                 for edge_idx in edges {
-    //                     let bb = &self.all_edges[*edge_idx];
-    //                     // if it's an indirect call we have no clue of the predecessor...
-    //                     // if bb.successor_uuids.is_empty() && bb.num_indirect_calls > 0
-
-    //                     if bb.successor_uuids.is_empty() && 
-    //                         bb.coverage_map_idx.is_some() &&
-    //                         !parents.contains(&bb.coverage_map_idx.unwrap()) &&
-    //                         input_coverage_map_indexes.contains(&(bb.coverage_map_idx.unwrap().0 as usize)) 
-    //                     {
-    //                         if let Some(next_func) = bb.called_funcs.last() {
-    //                             if !handled_funcs.contains(next_func) {
-    //                                 stack.push(bb.called_funcs.last().unwrap());
-    //                             }
-    //                         } else {
-    //                             parents.insert(bb.coverage_map_idx.unwrap());
-    //                         }
-    //                     }
-    //                 } 
-    //             }
-
-    //             for parent in parents {
-    //                 let idx = parent.0 as usize;
-    //                 if let Some(cur_children) = neighbours_info.get_mut(&idx) {
-    //                     cur_children.append(&mut children.clone());
-    //                 } else {
-    //                     neighbours_info.insert(idx, children.clone());
-    //                 }
-    //             }
-    //         }
-
-    //     }
-
-    //     neighbours_info
-    // }
 
     /// Return a map from parent edges to a list of their direct neighbours (descendents)
     pub fn direct_neighbours_for_edges_in_path(

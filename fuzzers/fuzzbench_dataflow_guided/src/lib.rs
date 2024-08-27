@@ -350,7 +350,8 @@ fn fuzz(
 
     let mutation = StdMutationalStage::with_max_iterations(mutator, 128);
 
-    let scheduler = PrescientProbabilitySamplingScheduler::new_with_backoff(backoff_factor);
+    let scheduler = PrescientProbabilitySamplingScheduler::
+        new_with_backoff_and_max_prescient_depth(backoff_factor, 3);
 
     // A fuzzer with feedbacks and a corpus scheduler
     let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);

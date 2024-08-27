@@ -30,6 +30,7 @@ where
     S: UsesInput,
 {
     backoff_factor: f64,
+    max_depth: usize,
     phantom: PhantomData<S>,
 }
 
@@ -92,9 +93,10 @@ where
 {
     /// Creates a new [`struct@ProbabilitySamplingScheduler`]
     #[must_use]
-    pub fn new_with_backoff(backoff_factor: f64) -> Self {
+    pub fn new_with_backoff_and_max_prescient_depth(backoff_factor: f64, max_depth: usize) -> Self {
         Self {
             backoff_factor,
+            max_depth,
             phantom: PhantomData,
         }
     }
@@ -144,7 +146,7 @@ where
 
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                cfg_metadata.get_all_neighbours_full_depth(&covered_indexes, &covered_blocks)
+                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &covered_indexes, &covered_blocks)
             };
 
             if !last_recalc_corpus_ids.contains(&idx) {
@@ -242,32 +244,24 @@ where
             weighting
         };
 
-        let mut favored_filled = HashSet::with_capacity(65536);
-        let mut reachability_favored_ids = HashSet::new();
-        let mut coverage_favored_ids = HashSet::new();
-        let mut favored_edges = HashSet::new();
-        let mut all_covered = HashSet::new();
         let mut neighbour_score_for_idx = HashMap::new();
 
         // greedily select a minimal subset of testcases that cover all neighbours (based on runtime)
         for &(entry, _runtime) in &time_ordered {
             let tc = state.corpus().get(entry)?.borrow();
             let idx_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
-            for &edge in &idx_meta.list { all_covered.insert(edge); }
 
             let mut neighbour_score = 0f64;
-            let mut reachability_favored = false;
 
             let covered_indexes = idx_meta.list.clone();
             drop(tc);
 
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                cfg_metadata.get_all_neighbours_full_depth(&covered_indexes, &covered_blocks)
+                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &covered_indexes, &covered_blocks)
             };
 
             let tc = state.corpus().get(entry)?.borrow();
-            let idx_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             for reachability in reachabilities {
                 // Only keep this if it's the best depth we've seen for this edge
                 if reachability.depth == reachable_blocks_result.least_depth_for_index[&reachability.index] {
@@ -277,27 +271,10 @@ where
                     let backoff_weighting = backoff_weighting_for_direct_neighbour.get(&reachability.direct_neighbour_ancestor_index);
                     if backoff_weighting.is_none() { println!("backoff_weighting is none for {:?}", reachability.direct_neighbour_ancestor_index); }
                     neighbour_score += backoff_weighting.unwrap() * rarity * 1f64 / reachability.depth as f64;
-                    reachability_favored |= favored_filled.insert(reachability.index);
                 }
             }
             neighbour_score_for_idx.insert(entry, neighbour_score);
-                
-            let mut coverage_favored = false;
-            for &edge in &idx_meta.list { 
-                coverage_favored |= favored_edges.insert(edge); 
-            }
-
-            if reachability_favored {
-                reachability_favored_ids.insert(entry);
-            } else if coverage_favored {
-                coverage_favored_ids.insert(entry);
-            }
         }
-
-        let skipped = all_covered.difference(&favored_edges).copied().collect::<Vec<usize>>();
-        println!("Minimised the testset from {corpus_size} down to {} favored entries - and {} somewhat favored (favored edges: {}, missed out {} entries: {:?})", 
-                 reachability_favored_ids.len(), coverage_favored_ids.len(),
-                 favored_edges.len(), skipped.len(), skipped);
 
         let mut all_scores = vec![];
         for entry in ids {
@@ -423,6 +400,6 @@ where
     S::Input: HasLen,
 {
     fn default() -> Self {
-        Self::new_with_backoff(0.9999)
+        Self::new_with_backoff_and_max_prescient_depth(0.9999, 9999)
     }
 }
