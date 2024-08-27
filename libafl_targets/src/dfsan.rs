@@ -350,6 +350,7 @@ where
 
         for (_edge_idx, bytes) in bytes_depended_on_by_edge.iter_mut() {
             bytes.sort();
+            bytes.shrink_to_fit();
         }
 
         println!(
