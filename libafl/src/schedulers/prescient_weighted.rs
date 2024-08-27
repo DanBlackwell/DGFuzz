@@ -170,27 +170,28 @@ where
 
             for reachability in reachabilities {
                 // update reachability frequencies
-                let new = if let Some(freq) = result.frequency_for_reachability.get(&reachability) {
-                    freq + 1
+                if let Some(freq) = result.frequency_for_reachability.get_mut(&reachability) {
+                    *freq += 1
                 } else {
-                    1
-                };
-                result.frequency_for_reachability.insert(reachability.clone(), new);
+                    result.frequency_for_reachability.insert(reachability, 1);
+                }
 
                 // update number of mutations of direct neighbours (if appropriate)
                 if reachability.depth == 1 {
-                    let updated = if let Some(freq) = result.direct_neighbour_mutations_for_index.get(&reachability.index) {
-                        freq + num_mutations
+                    if let Some(freq) = result.direct_neighbour_mutations_for_index
+                        .get_mut(&reachability.direct_neighbour_ancestor_index) 
+                    {
+                        *freq += num_mutations;
                     } else {
-                        num_mutations
-                    };
-                    result.direct_neighbour_mutations_for_index.insert(reachability.index, updated);
+                        result.direct_neighbour_mutations_for_index
+                            .insert(reachability.direct_neighbour_ancestor_index, num_mutations);
+                    }
                 }
 
                 // update least depth for index (if we beat the previous depth)
-                if let Some(cur_min) = result.least_depth_for_index.get(&reachability.index) {
+                if let Some(cur_min) = result.least_depth_for_index.get_mut(&reachability.index) {
                     if reachability.depth < *cur_min { 
-                        result.least_depth_for_index.insert(reachability.index, reachability.depth); 
+                        *cur_min = reachability.depth
                     }
                 } else {
                     result.least_depth_for_index.insert(reachability.index, reachability.depth);
@@ -216,7 +217,6 @@ where
         let mut total_score = 0.0;
 
         let ids = state.corpus().ids().collect::<Vec<CorpusId>>();
-        let corpus_size = ids.len();
         let mut min_time = f64::MAX;
 
         // sort entries by time
@@ -261,7 +261,6 @@ where
                 cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &covered_indexes, &covered_blocks)
             };
 
-            let tc = state.corpus().get(entry)?.borrow();
             for reachability in reachabilities {
                 // Only keep this if it's the best depth we've seen for this edge
                 if reachability.depth == reachable_blocks_result.least_depth_for_index[&reachability.index] {

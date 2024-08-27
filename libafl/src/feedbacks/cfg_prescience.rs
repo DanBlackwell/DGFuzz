@@ -771,8 +771,6 @@ impl ControlFlowGraph {
                     hit_functions.insert(func.clone());
                 }
 
-                // Can't make this assertion as we may have a basic block which contains only
-                // instrumented instructions
                 for func in bb.called_funcs.clone() {
                     if hit_functions.insert(func.clone()) {
                         if let Some(edges_in_func) = self.edges_in_func_named.get(&func) {
@@ -781,9 +779,7 @@ impl ControlFlowGraph {
                                 continue;
                             }
                             let first_edge = edges_in_func[0][0];
-                            if let Some(direct_neighbour_ancestor_index) = direct_neighbour_predecessor {
-                                queue.push_back((depth, first_edge, Some(direct_neighbour_ancestor_index)));
-                            }
+                            queue.push_back((depth, first_edge, direct_neighbour_predecessor));
                         }
                     }
                 }
@@ -809,9 +805,11 @@ impl ControlFlowGraph {
             for successor in successors {
                 let map_idx = successor.0 as usize;
                 if covered.insert(map_idx) {
-                    let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(map_idx);
-                    // only count the BB just before a fork
+                    let mut direct_neighbour_predecessor = direct_neighbour_predecessor;
+                    // only count the BBs just after a fork
                     if !single_succ {
+                        let direct_neighbour_ancestor_index = direct_neighbour_predecessor.unwrap_or(map_idx);
+                        direct_neighbour_predecessor = Some(direct_neighbour_ancestor_index);
                         reachable.push(Reachability {
                             index: map_idx,
                             depth,
@@ -819,7 +817,7 @@ impl ControlFlowGraph {
                         });
                     }
                     queue.push_back(
-                        (if single_succ { depth } else { depth + 1 }, map_idx, Some(direct_neighbour_ancestor_index))
+                        (if single_succ { depth } else { depth + 1 }, map_idx, direct_neighbour_predecessor)
                     );
                 }
             }
