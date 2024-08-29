@@ -22,8 +22,10 @@ pub static mut libafl_path_filled: u32 = 0;
 /// Metadata indicating the direct neighbours for each edge (for a given testcase)
 /// We need this because of indirect function calls not being resolvable otherwise
 pub struct TestcaseDirectNeighboursMetadata {
-    /// Map from a covered edge to the list of direct neigbours
-    pub direct_neighbours_for_edge: HashMap<usize, Vec<usize>>,
+    /// Map from a sancov 'last_edge' to it's uncovered successors
+    pub sancov_successors_for_edge: HashMap<usize, Vec<usize>>,
+    /// Map from a covered edge to the list of direct uncovered siblings
+    pub siblings_for_edge: HashMap<usize, Vec<usize>>,
 }
 
 crate::impl_serdeany!(TestcaseDirectNeighboursMetadata);

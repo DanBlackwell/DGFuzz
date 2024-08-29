@@ -510,10 +510,10 @@ where
             // let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             // let covered_indexes = covered_meta.list.clone();
 
-            let direct_neighbours_for_edge: HashMap<usize, Vec<usize>> = {
+            let siblings_for_edge: HashMap<usize, Vec<usize>> = {
                 tc.metadata::<TestcaseDirectNeighboursMetadata>()
                     .unwrap()
-                    .direct_neighbours_for_edge
+                    .siblings_for_edge
                     .clone()
             };
             drop(tc);
@@ -522,7 +522,7 @@ where
             // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
 
             // let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
-            let required_edges: Vec<usize> = direct_neighbours_for_edge.keys().copied().collect();
+            let required_edges: Vec<usize> = siblings_for_edge.keys().copied().collect();
             let bytes_depended_on_by_edge = self.get_bytes_depended_on_by_edges(
                 fuzzer,
                 executor,
@@ -551,12 +551,15 @@ where
             tc.add_metadata(meta);
             drop(tc);
 
+            // TODO: We should really keep track of the parents rather than siblings
+            //       as there can be many siblings for one parent (eg switch statements)
+
             // Add any new neighbours to the effort tracker
             let global_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for neighbours in direct_neighbours_for_edge.values() {
-                for neighbour in neighbours {
-                    if global_meta.num_mutations_for_edge.get(neighbour).is_none() {
-                        global_meta.num_mutations_for_edge.insert(*neighbour, 0);
+            for siblings in siblings_for_edge.values() {
+                for sibling in siblings {
+                    if global_meta.num_mutations_for_edge.get(sibling).is_none() {
+                        global_meta.num_mutations_for_edge.insert(*sibling, 0);
                     }
                 }
             }
@@ -570,16 +573,16 @@ where
         {
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
 
-            let direct_neighbours = &mut tc
+            let siblings_for_edge = &mut tc
                 .metadata_mut::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
-                .direct_neighbours_for_edge;
+                .siblings_for_edge;
             // clear out any dependencies that can't reach new edges
-            let dead_edges = direct_neighbours
+            let dead_edges = siblings_for_edge
                 .iter()
-                .filter(|(_, children)| {
-                    for child in *children {
-                        if !covered_blocks.contains(child) {
+                .filter(|(_, sibs)| {
+                    for sib in *sibs {
+                        if !covered_blocks.contains(sib) {
                             return false;
                         }
                     }
@@ -606,11 +609,11 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
         };
-        let direct_neighbours_for_edge = {
+        let siblings_for_edge = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
-                .direct_neighbours_for_edge
+                .siblings_for_edge
                 .clone()
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
@@ -620,8 +623,8 @@ where
         let mut max_power = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (parent, neighbours) in &direct_neighbours_for_edge {
-            let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_edge.get(parent) else {
+        for (current, siblings) in &siblings_for_edge {
+            let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_edge.get(current) else {
                 continue;
             };
             if dependent_bytes.is_empty() {
@@ -636,9 +639,9 @@ where
             }
 
             let mut power = 0;
-            for neighbour in neighbours {
-                if !covered_blocks.contains(neighbour) {
-                    let muts = df_meta.num_mutations_for_edge.get(neighbour).unwrap();
+            for sibling in siblings {
+                if !covered_blocks.contains(sibling) {
+                    let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
                     power += muts;
                 }
             }
@@ -828,15 +831,15 @@ where
                 let edges = &tc_meta_copy.edges_depending_on_bytes[target_bytes_pos];
                 let mut weirdies = vec![];
                 for edge in edges {
-                    if !direct_neighbours_for_edge.contains_key(edge) {
+                    if !siblings_for_edge.contains_key(edge) {
                         weirdies.push(*edge);
                     }
-                    _ = direct_neighbours_for_edge
+                    _ = siblings_for_edge
                         .get(edge)
-                        .is_some_and(|neighbours| {
-                            for neighbour in neighbours {
+                        .is_some_and(|siblings| {
+                            for sibling in siblings {
                                 let count =
-                                    df_meta.num_mutations_for_edge.get_mut(neighbour).unwrap();
+                                    df_meta.num_mutations_for_edge.get_mut(sibling).unwrap();
                                 *count += *num_mutations;
                             }
                             true

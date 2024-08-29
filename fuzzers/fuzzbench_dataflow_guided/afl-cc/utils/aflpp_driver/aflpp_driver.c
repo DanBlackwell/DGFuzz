@@ -65,7 +65,7 @@ extern "C" {
 #endif
 
 #include <sanitizer/dfsan_interface.h>
-extern u32 last_edge;
+extern u8 last_dfsan_label;
 
 // AFL++ shared memory fuzz cases
 int                   __afl_sharedmem_fuzzing = 1;
@@ -140,7 +140,7 @@ void dfsan_add_labels(u8 *input, size_t input_len) {
 
 void dfsan_found_conditional(dfsan_label label, dfsan_origin origin) {
   // fprintf(stderr, "hit DFSAN callback (last edge: %u), have label %hu\n", last_edge, label);
-  __afl_dataflow_ptr[last_edge] |= (u8)label;
+  last_dfsan_label = (u8)label;
 }
 
 void dfsan_init() {

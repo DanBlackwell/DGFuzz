@@ -117,7 +117,7 @@ static u32 __afl_fuzz_len_dummy;
 u32       *__afl_fuzz_len = &__afl_fuzz_len_dummy;
 int        __afl_sharedmem_fuzzing __attribute__((weak));
 
-u32 last_edge = 0;
+u32 last_dfsan_label = 0;
 u32 __afl_final_loc;
 u32 __afl_map_size = 2621440 / 2; // Fix this to match DGFuzz map size
 u32 __afl_dictionary_len;
@@ -1417,7 +1417,10 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
 
   */
 
- last_edge = *guard;
+  if (last_dfsan_label) {
+    __afl_dataflow_ptr[*guard] |= last_dfsan_label;
+    last_dfsan_label = 0;
+  }
 
 #if (LLVM_VERSION_MAJOR < 9)
 
