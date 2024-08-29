@@ -143,17 +143,20 @@ impl CmpValuesMetadata {
     {
         if self.list.is_empty() { return; }
 
+
         let curr_idx = state.corpus().current().unwrap();
         let tc = state.corpus().get(curr_idx).unwrap().borrow();
-        let df_meta = tc.metadata_map().get::<TestcaseDataflowMetadata>().unwrap();
+        let df_meta: &TestcaseDataflowMetadata = tc.metadata_map().get().unwrap();
+        let dn_meta: &TestcaseDirectNeighboursMetadata = tc.metadata_map().get().unwrap();
         let input = tc.input().as_ref().unwrap();
 
-        for (edge, byte_indexes) in &df_meta.bytes_depended_on_by_edge {
+        for (bb_cov_map_idx, byte_indexes) in &df_meta.bytes_depended_on_by_uncovered_bb {
             if byte_indexes.is_empty() { continue; }
-            let Some(cmpvals) = self.map.get(edge) else { continue; };
+            let Some(sancov_pred) = dn_meta.sancov_predecessor_for_edge.get(bb_cov_map_idx) else { continue; };
+            let Some(cmpvals) = self.map.get(sancov_pred) else { continue; };
             if cmpvals.is_empty() { continue; }
 
-            // println!("Found cmpvals and byte-dependency map for {edge}");
+            // println!("Found cmpvals and byte-dependency map for {bb_cov_map_idx}");
 
             let trimmed_cmps = cmpvals.into_iter()
                 .map(|c| {

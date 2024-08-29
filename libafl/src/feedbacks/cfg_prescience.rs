@@ -872,7 +872,7 @@ impl ControlFlowGraph {
             }
         }
 
-        let mut neighbours_info: HashMap<usize, HashSet<usize>> = HashMap::new();
+        let mut sancov_predecessor_for_edge: HashMap<usize, usize> = HashMap::new();
 
         let mut prev_cov_map_idx = path_cov_map_idxs[0];
         let mut sought_stack: Vec<HashSet<usize>> = vec![];
@@ -885,10 +885,8 @@ impl ControlFlowGraph {
 
                 if !successors.is_empty() {
                     // now assign these successors to the last block we saw
-                    if let Some(neighbours) = neighbours_info.get_mut(&(prev_cov_map_idx as usize)) {
-                        for succ in successors { neighbours.insert(succ); }
-                    } else {
-                        neighbours_info.insert(prev_cov_map_idx as usize, successors);
+                    for succ in successors {
+                        sancov_predecessor_for_edge.insert(succ, prev_cov_map_idx as usize);
                     }
                 }
             }
@@ -915,10 +913,6 @@ impl ControlFlowGraph {
             println!("Failed to find successors from the following stack: {:?}, path_len: {}", sought_stack, path_cov_map_idxs.len());
         }
 
-        let sancov_successors_for_edge = neighbours_info.into_iter().map(|(parent,children)| {
-            (parent, children.into_iter().collect::<Vec<usize>>())
-        }).collect();
-
-        TestcaseDirectNeighboursMetadata { sancov_successors_for_edge, siblings_for_edge }
+        TestcaseDirectNeighboursMetadata { sancov_predecessor_for_edge, siblings_for_edge }
     }
 }

@@ -406,7 +406,7 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
             let mut res = HashSet::new();
-            for (_edge, bytes) in &df_meta.bytes_depended_on_by_edge {
+            for (_edge, bytes) in &df_meta.bytes_depended_on_by_uncovered_bb {
                 for byte_pos in bytes {
                     res.insert(*byte_pos);
                 }
@@ -523,7 +523,7 @@ where
 
             // let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
             let required_edges: Vec<usize> = siblings_for_edge.keys().copied().collect();
-            let bytes_depended_on_by_edge = self.get_bytes_depended_on_by_edges(
+            let bytes_depended_on_by_bb = self.get_bytes_depended_on_by_edges(
                 fuzzer,
                 executor,
                 state,
@@ -532,20 +532,28 @@ where
             )?;
 
             let mut mutations_tested_on_target_bytes: HashMap<Vec<usize>, usize> = HashMap::new();
-            let mut edges_depending_on_bytes: HashMap<Vec<usize>, Vec<usize>> = HashMap::new();
-            for (edge, bytes) in &bytes_depended_on_by_edge {
-                if let Some(edges) = edges_depending_on_bytes.get_mut(bytes) {
-                    edges.push(*edge);
+            let mut uncovered_bbs_depending_on_bytes: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
+            let mut bytes_depended_on_by_uncovered_bb = HashMap::new();
+            for (edge, bytes) in &bytes_depended_on_by_bb {
+                let uncovered_siblings = &siblings_for_edge[edge];
+                for sib in uncovered_siblings {
+                    bytes_depended_on_by_uncovered_bb.insert(*sib, bytes.clone());
+                }
+                if let Some(edges) = uncovered_bbs_depending_on_bytes.get_mut(bytes) {
+                    for sib in uncovered_siblings { edges.insert(*sib); }
                 } else {
-                    edges_depending_on_bytes.insert(bytes.to_owned(), vec![*edge]);
+                    uncovered_bbs_depending_on_bytes.insert(
+                        bytes.to_owned(), HashSet::from_iter(uncovered_siblings.into_iter().cloned())
+                    );
                     mutations_tested_on_target_bytes.insert(bytes.to_owned(), 0);
                 }
             }
 
+
             let meta = TestcaseDataflowMetadata {
-                bytes_depended_on_by_edge,
+                bytes_depended_on_by_uncovered_bb,
                 mutations_tested_on_target_bytes,
-                edges_depending_on_bytes,
+                uncovered_bbs_depending_on_bytes,
             };
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
             tc.add_metadata(meta);
@@ -577,31 +585,41 @@ where
                 .metadata_mut::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
                 .siblings_for_edge;
-            // clear out any dependencies that can't reach new edges
-            let dead_edges = siblings_for_edge
-                .iter()
-                .filter(|(_, sibs)| {
-                    for sib in *sibs {
-                        if !covered_blocks.contains(sib) {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .map(|(parent, _)| *parent)
-                .collect::<Vec<usize>>();
 
-            let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
-            for edge in dead_edges {
-                tc_meta.bytes_depended_on_by_edge.remove(&edge);
+            // clear out any bbs that are now covered
+            let bbs: Vec<usize> = siblings_for_edge.keys().cloned().collect();
+            for current in &bbs {
+                let siblings = siblings_for_edge.get(current).unwrap();
+
+                let filtered: Vec<usize> = siblings.iter()
+                    .filter(|s| !covered_blocks.contains(*s))
+                    .cloned()
+                    .collect();
+
+                if filtered.is_empty() {
+                    siblings_for_edge.remove(current);
+                } else {
+                    siblings_for_edge.insert(*current, filtered);
+                }
             }
 
-            for (_bytes, edges) in &mut tc_meta.edges_depending_on_bytes {
-                *edges = edges
-                    .to_vec()
-                    .into_iter()
-                    .filter(|e| !covered_blocks.contains(e))
-                    .collect();
+            let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
+            for (bytes, cov_map_idxs) in tc_meta.uncovered_bbs_depending_on_bytes.clone() {
+                for cov_map_idx in &cov_map_idxs {
+                    if covered_blocks.contains(cov_map_idx) {
+                        tc_meta.bytes_depended_on_by_uncovered_bb.remove(cov_map_idx);
+                    }
+                }
+                if let Some(bbs) = tc_meta.uncovered_bbs_depending_on_bytes.get_mut(&bytes) {
+                    for cov_map_idx in cov_map_idxs {
+                        if covered_blocks.contains(&cov_map_idx) {
+                            bbs.remove(&cov_map_idx);
+                        }
+                    }
+                    if bbs.is_empty() {
+                        tc_meta.uncovered_bbs_depending_on_bytes.remove(&bytes);
+                    }
+                }
             }
         }
 
@@ -624,41 +642,39 @@ where
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
         for (current, siblings) in &siblings_for_edge {
-            let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_edge.get(current) else {
-                continue;
-            };
-            if dependent_bytes.is_empty() {
-                continue;
-            }
-            let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
-            // if we've already tested every possible value for this edge...
-            if (dependent_bytes.len() == 1 && muts >= 256)
-                || (dependent_bytes.len() == 2 && muts >= 65536 + 32768)
-            {
-                continue;
-            }
-
-            let mut power = 0;
             for sibling in siblings {
-                if !covered_blocks.contains(sibling) {
-                    let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
-                    power += muts;
+                let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
+                    continue;
+                };
+                if dependent_bytes.is_empty() {
+                    continue;
                 }
-            }
+                let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+                // if we've already tested every possible value for this edge...
+                if (dependent_bytes.len() == 1 && muts >= 256)
+                    || (dependent_bytes.len() == 2 && muts >= 65536 + 32768)
+                {
+                    continue;
+                }
 
-            if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
-                *bytes_power += power;
-                if *bytes_power > max_power {
-                    max_power = *bytes_power;
-                }
-            } else {
-                power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
-                if power > max_power {
-                    max_power = power;
-                }
-            }
+                let mut power = 0;
+                let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
+                power += muts;
 
-            total_muts += power;
+                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
+                    *bytes_power += power;
+                    if *bytes_power > max_power {
+                        max_power = *bytes_power;
+                    }
+                } else {
+                    power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
+                    if power > max_power {
+                        max_power = power;
+                    }
+                }
+
+                total_muts += power;
+            }
         }
 
         // Calculate how much to mutate the bytes for each target edge
@@ -828,30 +844,10 @@ where
             // update the mutation counts for all the targets
             let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
             for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
-                let edges = &tc_meta_copy.edges_depending_on_bytes[target_bytes_pos];
-                let mut weirdies = vec![];
-                for edge in edges {
-                    if !siblings_for_edge.contains_key(edge) {
-                        weirdies.push(*edge);
-                    }
-                    _ = siblings_for_edge
-                        .get(edge)
-                        .is_some_and(|siblings| {
-                            for sibling in siblings {
-                                let count =
-                                    df_meta.num_mutations_for_edge.get_mut(sibling).unwrap();
-                                *count += *num_mutations;
-                            }
-                            true
-                        });
-                }
-                if !weirdies.is_empty() {
-                    println!(
-                        "Found {} weirdies given {} covered edges (weirdies: {:?})",
-                        weirdies.len(),
-                        edges.len(),
-                        weirdies
-                    );
+                let bbs = &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos];
+                for bb_cov_map_idx in bbs {
+                    let count = df_meta.num_mutations_for_edge.get_mut(bb_cov_map_idx).unwrap();
+                    *count += *num_mutations;
                 }
             }
         }
