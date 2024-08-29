@@ -847,18 +847,21 @@ impl ControlFlowGraph {
         all_coverage_map_indexes: &HashSet<usize>,
     ) -> TestcaseDirectNeighboursMetadata {
 
+        // populate the mapping from edge index to uncovered siblings
         let mut siblings_for_edge = HashMap::new();
         let covered_idxs = path_cov_map_idxs.iter().map(|x| *x as usize).collect::<HashSet<usize>>();
         for idx in &covered_idxs {
             let bb = &self.all_edges[*idx];
-            let Some(succs) = &bb.successor_cov_map_idxs else { continue; };
             let mut covered_succs = vec![];
             let mut uncovered_succs = vec![];
-            for succ in succs {
-                if !all_coverage_map_indexes.contains(&(succ.0 as usize)) {
-                    uncovered_succs.push(succ.0 as usize);
+            for succ_uuid in &bb.successor_uuids {
+                let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid]]
+                    .coverage_map_idx else { continue; };
+                let succ_idx = succ_cov_map_idx.0 as usize;
+                if !all_coverage_map_indexes.contains(&succ_idx) {
+                    uncovered_succs.push(succ_idx);
                 } else {
-                    covered_succs.push(succ.0 as usize);
+                    covered_succs.push(succ_idx);
                 }
             }
 
