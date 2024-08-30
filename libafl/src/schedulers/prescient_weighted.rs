@@ -8,6 +8,7 @@ use core::{marker::PhantomData, fmt::Debug};
 use hashbrown::HashMap;
 use libafl_bolts::rands::Rand;
 use libafl_bolts::HasLen;
+use libafl_bolts::dataflow_metadata::TestcaseDataflowMetadata;
 use serde::{Deserialize, Serialize};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -134,7 +135,16 @@ where
         for &idx in &all_ids {
             recalcs += 1;
 
-            let tc = state.corpus().get(idx).unwrap().borrow();
+            let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+            let affected_bb_idxs: Option<Vec<usize>> = tc.metadata_map_mut()
+                .get_mut::<TestcaseDataflowMetadata>().map(|meta| {
+                    meta.bytes_depended_on_by_uncovered_bb
+                        .retain(|idx, bytes| !bytes.is_empty() && ! covered_blocks.contains(idx));
+                    meta.bytes_depended_on_by_uncovered_bb
+                        .keys()
+                        .cloned()
+                        .collect()
+                });
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
             let num_mutations = if let Ok(meta) = tc.metadata::<TestcaseMutationsMetadata>() {
@@ -146,7 +156,8 @@ where
 
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &covered_indexes, &covered_blocks)
+                let to_explore = affected_bb_idxs.unwrap_or(covered_indexes);
+                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &to_explore, &covered_blocks)
             };
 
             if !last_recalc_corpus_ids.contains(&idx) {
@@ -254,11 +265,18 @@ where
             let mut neighbour_score = 0f64;
 
             let covered_indexes = idx_meta.list.clone();
+            let affected_bb_idxs: Option<Vec<usize>> = tc.metadata_map()
+                .get::<TestcaseDataflowMetadata>().map(|meta| {
+                    meta.bytes_depended_on_by_uncovered_bb.keys().cloned().collect()
+                });
             drop(tc);
 
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &covered_indexes, &covered_blocks)
+                // if Dataflow stage has not been run for this input, then there will
+                // be more to_explore, and therefore a higher chance of being selected
+                let to_explore = affected_bb_idxs.unwrap_or(covered_indexes);
+                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &to_explore, &covered_blocks)
             };
 
             for reachability in reachabilities {
@@ -350,32 +368,38 @@ where
     #[allow(clippy::cast_precision_loss)]
     fn next(&mut self, state: &mut Self::State) -> Result<CorpusId, Error> {
         if state.corpus().count() == 0 {
-            Err(Error::empty(String::from("No entries in corpus")))
-        } else {
-            const MAX_RAND: u64 = 1_000_000;
-            let rand_prob: f64 = (state.rand_mut().below(MAX_RAND as usize) as f64) / MAX_RAND as f64;
+            return Err(Error::empty(String::from("No entries in corpus")));
+        }
 
-            let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-            if meta.needs_recalc {
-                let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-                let time_since_recalc = ts_now - meta.last_recalc_time;
-                let last_duration = meta.last_recalc_duration;
-                // Don't spend more than 10% of the fuzzer time recalculating these stats - sure
-                // this feels like we're not using the neighbours prescient power much at the start
-                // of the campaign, but fuzzing campaigns last hours...
-                if time_since_recalc >= (10 * last_duration)  {
-                    println!("Last recalc took {last_duration}ms, now recalcing as it has been {time_since_recalc}");
-                    let start = Instant::now();
-                    self.recalculate_reachable_blocks(state);
-                    self.recalc_all_probabilities(state).unwrap();
+        let pick_random = state.rand_mut().below(5) == 0;
+        const MAX_RAND: u64 = 1_000_000;
+        let rand_prob: f64 = (state.rand_mut().below(MAX_RAND as usize) as f64) / MAX_RAND as f64;
 
-                    let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-                    meta.needs_recalc = false;
-                    meta.last_recalc_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-                    meta.last_recalc_duration = start.elapsed().as_millis();
-                }
+        let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
+        if meta.needs_recalc {
+            let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+            let time_since_recalc = ts_now - meta.last_recalc_time;
+            let last_duration = meta.last_recalc_duration;
+            // Don't spend more than 10% of the fuzzer time recalculating these stats - sure
+            // this feels like we're not using the neighbours prescient power much at the start
+            // of the campaign, but fuzzing campaigns last hours...
+            if time_since_recalc >= (10 * last_duration)  {
+                println!("Last recalc took {last_duration}ms, now recalcing as it has been {time_since_recalc}");
+                let start = Instant::now();
+                self.recalculate_reachable_blocks(state);
+                self.recalc_all_probabilities(state).unwrap();
+
+                let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
+                meta.needs_recalc = false;
+                meta.last_recalc_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+                meta.last_recalc_duration = start.elapsed().as_millis();
             }
+        }
 
+        let selected_index = if pick_random {
+            // Keep some diversity by occasionally selecting completely randomly
+            CorpusId::from((rand_prob as usize) % state.corpus().count())
+        } else {
             let meta = state.metadata_map().get::<ProbabilityMetadata>().unwrap();
             let threshold = meta.total_probability * rand_prob;
             let mut k: f64 = 0.0;
@@ -387,9 +411,11 @@ where
                     break;
                 }
             }
-            self.set_current_scheduled(state, Some(ret))?;
-            Ok(ret)
-        }
+            ret
+        };
+
+        self.set_current_scheduled(state, Some(selected_index))?;
+        Ok(selected_index)
     }
 }
 
