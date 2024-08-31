@@ -136,15 +136,6 @@ where
             recalcs += 1;
 
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
-            let affected_bb_idxs: Option<Vec<usize>> = tc.metadata_map_mut()
-                .get_mut::<TestcaseDataflowMetadata>().map(|meta| {
-                    meta.bytes_depended_on_by_uncovered_bb
-                        .retain(|idx, bytes| !bytes.is_empty() && ! covered_blocks.contains(idx));
-                    meta.bytes_depended_on_by_uncovered_bb
-                        .keys()
-                        .cloned()
-                        .collect()
-                });
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
             let num_mutations = if let Ok(meta) = tc.metadata::<TestcaseMutationsMetadata>() {
@@ -156,8 +147,9 @@ where
 
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                let to_explore = affected_bb_idxs.unwrap_or(covered_indexes);
-                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &to_explore, &covered_blocks)
+                cfg_metadata.get_all_neighbours_upto_depth(
+                    self.max_depth, &covered_indexes, &covered_blocks
+                )
             };
 
             if !last_recalc_corpus_ids.contains(&idx) {
@@ -265,18 +257,13 @@ where
             let mut neighbour_score = 0f64;
 
             let covered_indexes = idx_meta.list.clone();
-            let affected_bb_idxs: Option<Vec<usize>> = tc.metadata_map()
-                .get::<TestcaseDataflowMetadata>().map(|meta| {
-                    meta.bytes_depended_on_by_uncovered_bb.keys().cloned().collect()
-                });
             drop(tc);
 
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
-                // if Dataflow stage has not been run for this input, then there will
-                // be more to_explore, and therefore a higher chance of being selected
-                let to_explore = affected_bb_idxs.unwrap_or(covered_indexes);
-                cfg_metadata.get_all_neighbours_upto_depth(self.max_depth, &to_explore, &covered_blocks)
+                cfg_metadata.get_all_neighbours_upto_depth(
+                    self.max_depth, &covered_indexes, &covered_blocks
+                )
             };
 
             for reachability in reachabilities {

@@ -19,7 +19,7 @@ use crate::{
     observers::{MapObserver, ObserversTuple},
     schedulers::powersched::SchedulerMetadata,
     stages::{ExecutionCountRestartHelper, Stage},
-    state::{HasCorpus, HasCurrentTestcase, HasExecutions, State, UsesState},
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, State, UsesState, HasClientPerfMonitor},
     Error, HasMetadata, HasNamedMetadata,
 };
 
@@ -340,6 +340,9 @@ where
                 },
             )?;
         }
+
+        #[cfg(feature = "introspection")]
+        state.introspection_monitor_mut().finish_stage();
 
         Ok(())
     }

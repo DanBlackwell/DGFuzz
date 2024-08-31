@@ -846,9 +846,8 @@ impl ControlFlowGraph {
         path_cov_map_idxs: &[u32],
         all_coverage_map_indexes: &HashSet<usize>,
     ) -> TestcaseDirectNeighboursMetadata {
-
         // populate the mapping from edge index to uncovered siblings
-        let mut siblings_for_edge = HashMap::new();
+        let mut siblings_for_covered_bb = HashMap::new();
         let covered_idxs = path_cov_map_idxs.iter().map(|x| *x as usize).collect::<HashSet<usize>>();
         for idx in &covered_idxs {
             let bb = &self.all_edges[*idx];
@@ -860,14 +859,14 @@ impl ControlFlowGraph {
                 let succ_idx = succ_cov_map_idx.0 as usize;
                 if !all_coverage_map_indexes.contains(&succ_idx) {
                     uncovered_succs.push(succ_idx);
-                } else {
+                } else if covered_idxs.contains(&succ_idx) {
                     covered_succs.push(succ_idx);
                 }
             }
 
             if !uncovered_succs.is_empty() {
                 for covered_succ in covered_succs {
-                    siblings_for_edge.insert(covered_succ, uncovered_succs.clone());
+                    siblings_for_covered_bb.insert(covered_succ, uncovered_succs.clone());
                 }
             }
         }
@@ -913,6 +912,6 @@ impl ControlFlowGraph {
             println!("Failed to find successors from the following stack: {:?}, path_len: {}", sought_stack, path_cov_map_idxs.len());
         }
 
-        TestcaseDirectNeighboursMetadata { sancov_predecessor_for_edge, siblings_for_edge }
+        TestcaseDirectNeighboursMetadata { sancov_predecessor_for_edge, siblings_for_covered_bb }
     }
 }

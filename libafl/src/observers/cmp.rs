@@ -143,10 +143,11 @@ impl CmpValuesMetadata {
     {
         if self.list.is_empty() { return; }
 
-
         let curr_idx = state.corpus().current().unwrap();
         let tc = state.corpus().get(curr_idx).unwrap().borrow();
-        let df_meta: &TestcaseDataflowMetadata = tc.metadata_map().get().unwrap();
+        let Some(df_meta) = tc.metadata_map().get::<TestcaseDataflowMetadata>() else {
+            return;
+        };
         let dn_meta: &TestcaseDirectNeighboursMetadata = tc.metadata_map().get().unwrap();
         let input = tc.input().as_ref().unwrap();
 

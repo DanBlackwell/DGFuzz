@@ -25,7 +25,7 @@ pub struct TestcaseDirectNeighboursMetadata {
     /// Map from an uncovered bb coverage map index to its sancov predecessor
     pub sancov_predecessor_for_edge: HashMap<usize, usize>,
     /// Map from a covered edge to the list of direct uncovered siblings
-    pub siblings_for_edge: HashMap<usize, Vec<usize>>,
+    pub siblings_for_covered_bb: HashMap<usize, Vec<usize>>,
 }
 
 crate::impl_serdeany!(TestcaseDirectNeighboursMetadata);

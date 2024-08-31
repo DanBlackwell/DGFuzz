@@ -21,7 +21,7 @@ use libafl_bolts::{
 
 use libafl::{
     common::HasMetadata,
-    corpus::Corpus,
+    corpus::{Corpus, CorpusId},
     events::{EventFirer, EventRestarter},
     executors::{Executor, HasObservers, ForkserverExecutor},
     feedbacks::{
@@ -115,6 +115,7 @@ where
     >,
     dfsan_labels_map: OwnedMutSlice<'a, u8>,
     mutations_per_stage: usize,
+    last_new_corpus_entry_time: Option<(CorpusId, std::time::Instant)>,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(E, EM, Z)>,
 }
@@ -167,6 +168,7 @@ where
             executor,
             dfsan_labels_map: dfsan_labels_map_slice,
             mutations_per_stage,
+            last_new_corpus_entry_time: None,
             phantom: PhantomData,
         }
     }
@@ -180,8 +182,8 @@ where
         manager: &mut EM,
         input: &E::Input,
         labels: &Vec<DFSanLabelInfo>,
-        required_edges: &[usize],
-    ) -> Result<HashMap<u8, Vec<usize>>, Error>
+        required_edges: &HashSet<usize>,
+    ) -> Result<HashMap<u8, HashSet<usize>>, Error>
     where
         E: UsesState,
         EM: EventFirer<State = E::State> + EventRestarter,
@@ -206,7 +208,7 @@ where
             pos += 4;
         }
 
-        self.executor.run_target(fuzzer, state, manager, input)?;
+        self.executor.run_target(fuzzer, state, manager, input).unwrap();
 
         // let mut all_edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
         // for edge_num in 0..31 {
@@ -224,7 +226,7 @@ where
         // }
         // println!("labels: {:?}, all_edges_for_label: {:?}", labels, all_edges_for_label);
 
-        let mut edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
+        let mut edges_for_label: HashMap<u8, HashSet<usize>> = HashMap::new();
         for &edge_num in required_edges {
             if buf[edge_num] != 0 {
                 let the_byte = buf[edge_num];
@@ -232,13 +234,12 @@ where
                     if (the_byte >> bit) & 1 == 1 {
                         let label_num = bit + 1;
                         if let Some(edges) = edges_for_label.get_mut(&label_num) {
-                            edges.push(edge_num);
+                            edges.insert(edge_num);
                         } else {
-                            edges_for_label.insert(label_num, vec![edge_num]);
+                            edges_for_label.insert(label_num, HashSet::from([edge_num]));
                         }
                     }
                 }
-                buf[edge_num] = 0;
             }
         }
 
@@ -295,27 +296,36 @@ where
         let mut bytes_depended_on_by_edge = {
             let mut tmp = HashMap::new();
             for e in required_edges {
-                tmp.insert(*e, Vec::with_capacity(50));
+                tmp.insert(*e, Vec::with_capacity(20));
             }
             tmp
         };
 
-        let mut stack = vec![(required_edges.to_vec(), 0..input.bytes().len())];
-        // once there are 50 bytes dependent, stop trying to compute more!
+        let all_required: HashSet<usize> = required_edges.iter().cloned().collect();
+        let mut stack = vec![(all_required, 0..input.bytes().len())];
+        // once there are 20 bytes dependent, stop trying to compute more!
         let mut saturated_conds = HashSet::new();
         // println!("input len: {:?}", input.bytes().len());
 
+        let mut exec_time = std::time::Duration::new(0, 0);
+        let mut filter_req_time = std::time::Duration::new(0, 0);
+        let mut populate_dependent = std::time::Duration::new(0, 0);
+        let mut execs = 0;
         // Collect up a list of bytes that each edge depends on; these may be disjoint
         // e.g. if (data[0] + data[3] - data[5] == 0)
-        while let Some((required_edges, byte_range)) = stack.pop() {
-            let mut sats_copy = saturated_conds.clone();
-            let required_edges: Vec<usize> = required_edges.into_iter()
-                .filter(|e| sats_copy.is_empty() || !sats_copy.remove(e))
-                .collect();
+        while let Some((mut required_edges, byte_range)) = stack.pop() {
+            let start = std::time::Instant::now();
+            if required_edges.len() < saturated_conds.len() {
+                required_edges.retain(|req| !saturated_conds.contains(req));
+            } else {
+                for sat in &saturated_conds { required_edges.remove(sat); }
+            }
+            filter_req_time += start.elapsed();
             if required_edges.is_empty() {
                 continue;
             }
 
+            let start = std::time::Instant::now();
             let label_infos = get_labels_for_range(byte_range);
             let edges_for_label = self.run_and_collect_labels(
                 fuzzer,
@@ -326,6 +336,9 @@ where
                 &label_infos,
                 &required_edges,
             )?;
+            execs += 1;
+            exec_time += start.elapsed();
+            let start = std::time::Instant::now();
 
             // println!("edges_for_label: {:?}", edges_for_label);
             for (label, edges) in edges_for_label {
@@ -335,7 +348,7 @@ where
                         let dependent_bytes = bytes_depended_on_by_edge
                             .get_mut(&edge_idx)
                             .unwrap();
-                        if dependent_bytes.len() >= 50 {
+                        if dependent_bytes.len() >= 20 {
                             saturated_conds.insert(edge_idx);
                         } else {
                             dependent_bytes.push(linfo.start_pos);
@@ -346,6 +359,8 @@ where
                     stack.push((edges, linfo.start_pos..(linfo.start_pos + linfo.len)));
                 }
             }
+
+            populate_dependent += start.elapsed();
         }
 
         for (_edge_idx, bytes) in bytes_depended_on_by_edge.iter_mut() {
@@ -368,11 +383,14 @@ where
                 .collect::<HashMap<&usize, std::string::String>>()
         );
 
+        println!("getting dependencies breakdown, exec time: {:?} ({execs} execs {:?} each), filter reqs: {:?}, populate dependent: {:?}",
+            exec_time, exec_time / execs, filter_req_time, populate_dependent);
+
         // Save memory by filtering large dependencies (chances are the targetting won't help much)
-        bytes_depended_on_by_edge = bytes_depended_on_by_edge
-            .into_iter()
-            .filter(|(_edge, bytes)| bytes.len() < 50)
-            .collect();
+        // bytes_depended_on_by_edge = bytes_depended_on_by_edge
+        //     .into_iter()
+        //     .filter(|(_edge, bytes)| bytes.len() < 20)
+        //     .collect();
 
         Ok(bytes_depended_on_by_edge)
     }
@@ -497,24 +515,50 @@ where
             });
         }
 
+        let last_new = self.last_new_corpus_entry_time;
+        if let Some(last) = state.corpus().last() {
+            if last_new.is_none() || last > last_new.unwrap().0 {
+                self.last_new_corpus_entry_time = Some((last, std::time::Instant::now()));
+            }
+        }
+
+        let Some((corpus_id, found_time)) = last_new else {
+            return Ok(());
+        };
+
+        if found_time.elapsed() < std::time::Duration::from_secs(3) {
+            return Ok(());
+        }
+
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
 
         let full_neighbours_meta = state.metadata::<MapNeighboursFeedbackMetadata>().unwrap();
         let covered_blocks = full_neighbours_meta.covered_blocks.clone();
 
         let idx = state.corpus().current().unwrap();
-        let tc = state.corpus().get(idx).unwrap().borrow();
+        let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+
+        start_timer!(state);
 
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
+            let start = std::time::Instant::now();
             // let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             // let covered_indexes = covered_meta.list.clone();
 
-            let siblings_for_edge: HashMap<usize, Vec<usize>> = {
-                tc.metadata::<TestcaseDirectNeighboursMetadata>()
+            let siblings_for_covered_bb: HashMap<usize, Vec<usize>> = {
+                let siblings_for_covered_bb = &mut tc
+                    .metadata_mut::<TestcaseDirectNeighboursMetadata>()
                     .unwrap()
-                    .siblings_for_edge
-                    .clone()
+                    .siblings_for_covered_bb;
+
+                // clear out any bbs that are now covered
+                siblings_for_covered_bb.retain(|current, siblings| {
+                    siblings.retain(|s| !covered_blocks.contains(s));
+                    !siblings.is_empty()
+                });
+
+                siblings_for_covered_bb.clone()
             };
             drop(tc);
             // let mut sorted_all = covered_blocks.clone().into_iter().collect::<Vec<usize>>();
@@ -522,20 +566,20 @@ where
             // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
 
             // let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
-            let required_edges: Vec<usize> = siblings_for_edge.keys().copied().collect();
+            let required_edges: Vec<usize> = siblings_for_covered_bb.keys().copied().collect();
             let bytes_depended_on_by_bb = self.get_bytes_depended_on_by_edges(
                 fuzzer,
                 executor,
                 state,
                 manager,
                 &required_edges,
-            )?;
+            ).unwrap();
 
             let mut mutations_tested_on_target_bytes: HashMap<Vec<usize>, usize> = HashMap::new();
             let mut uncovered_bbs_depending_on_bytes: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
             let mut bytes_depended_on_by_uncovered_bb = HashMap::new();
             for (edge, bytes) in &bytes_depended_on_by_bb {
-                let uncovered_siblings = &siblings_for_edge[edge];
+                let uncovered_siblings = &siblings_for_covered_bb[edge];
                 for sib in uncovered_siblings {
                     bytes_depended_on_by_uncovered_bb.insert(*sib, bytes.clone());
                 }
@@ -564,16 +608,19 @@ where
 
             // Add any new neighbours to the effort tracker
             let global_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for siblings in siblings_for_edge.values() {
+            for siblings in siblings_for_covered_bb.values() {
                 for sibling in siblings {
                     if global_meta.num_mutations_for_edge.get(sibling).is_none() {
                         global_meta.num_mutations_for_edge.insert(*sibling, 0);
                     }
                 }
             }
+
         } else {
             drop(tc);
         }
+        
+        mark_feature_time!(state, PerfFeature::ComputeDataflowDependencies);
 
         // self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations)?;
 
@@ -581,45 +628,26 @@ where
         {
             let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
 
-            let siblings_for_edge = &mut tc
+            let siblings_for_covered_bb = &mut tc
                 .metadata_mut::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
-                .siblings_for_edge;
+                .siblings_for_covered_bb;
 
             // clear out any bbs that are now covered
-            let bbs: Vec<usize> = siblings_for_edge.keys().cloned().collect();
-            for current in &bbs {
-                let siblings = siblings_for_edge.get(current).unwrap();
-
-                let filtered: Vec<usize> = siblings.iter()
-                    .filter(|s| !covered_blocks.contains(*s))
-                    .cloned()
-                    .collect();
-
-                if filtered.is_empty() {
-                    siblings_for_edge.remove(current);
-                } else {
-                    siblings_for_edge.insert(*current, filtered);
-                }
-            }
+            siblings_for_covered_bb.retain(|current, siblings| {
+                siblings.retain(|s| !covered_blocks.contains(s));
+                !siblings.is_empty()
+            });
 
             let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
             for (bytes, cov_map_idxs) in tc_meta.uncovered_bbs_depending_on_bytes.clone() {
-                for cov_map_idx in &cov_map_idxs {
-                    if covered_blocks.contains(cov_map_idx) {
-                        tc_meta.bytes_depended_on_by_uncovered_bb.remove(cov_map_idx);
-                    }
-                }
-                if let Some(bbs) = tc_meta.uncovered_bbs_depending_on_bytes.get_mut(&bytes) {
-                    for cov_map_idx in cov_map_idxs {
-                        if covered_blocks.contains(&cov_map_idx) {
-                            bbs.remove(&cov_map_idx);
-                        }
-                    }
-                    if bbs.is_empty() {
-                        tc_meta.uncovered_bbs_depending_on_bytes.remove(&bytes);
-                    }
-                }
+                tc_meta.bytes_depended_on_by_uncovered_bb.retain(|cov_map_idx, _| {
+                    !covered_blocks.contains(cov_map_idx)
+                });
+                tc_meta.uncovered_bbs_depending_on_bytes.retain(|bytes, cov_map_idxs| {
+                    cov_map_idxs.retain(|idx| !covered_blocks.contains(idx));
+                    !cov_map_idxs.is_empty()
+                });
             }
         }
 
@@ -627,11 +655,11 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
         };
-        let siblings_for_edge = {
+        let siblings_for_covered_bb = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
-                .siblings_for_edge
+                .siblings_for_covered_bb
                 .clone()
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
@@ -641,7 +669,7 @@ where
         let mut max_power = 0usize;
 
         // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (current, siblings) in &siblings_for_edge {
+        for (current, siblings) in &siblings_for_covered_bb {
             for sibling in siblings {
                 let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
                     continue;
@@ -758,11 +786,10 @@ where
             for _ in 0..*num_mutations {
                 let mut input = target_bytes_input.clone();
 
+                start_timer!(state);
                 let altered_bytes = if input.bytes().len() >= 3 {
                     // There are a few bytes to mutate here, use the mutator
-                    start_timer!(state);
-                    let mutated = mutator.mutate(state, &mut input)?;
-                    mark_feature_time!(state, PerfFeature::Mutate);
+                    let mutated = mutator.mutate(state, &mut input).unwrap();
 
                     if mutated == MutationResult::Skipped {
                         continue;
@@ -813,6 +840,7 @@ where
 
                     input.bytes()
                 };
+                mark_feature_time!(state, PerfFeature::Mutate);
 
                 let mut input = original_input.clone();
                 let bytes = input.bytes_mut();
@@ -822,9 +850,11 @@ where
                 }
 
                 // Time is measured directly the `evaluate_input` function
-                let (untransformed, post) = input.try_transform_into(state)?;
+                let (untransformed, post) = input.try_transform_into(state).unwrap();
+                start_timer!(state);
                 let (result, corpus_idx) =
-                    fuzzer.evaluate_input(state, executor, manager, untransformed)?;
+                    fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
+                mark_feature_time!(state, PerfFeature::TargetExecution);
 
                 if result == ExecuteInputResult::Corpus {
                     println!(
@@ -834,8 +864,8 @@ where
                 }
 
                 start_timer!(state);
-                mutator.post_exec(state, corpus_idx)?;
-                post.post_exec(state, corpus_idx)?;
+                mutator.post_exec(state, corpus_idx).unwrap();
+                post.post_exec(state, corpus_idx).unwrap();
                 mark_feature_time!(state, PerfFeature::MutatePostExec);
             }
         }
@@ -851,6 +881,9 @@ where
                 }
             }
         }
+
+        #[cfg(feature = "introspection")]
+        state.introspection_monitor_mut().finish_stage();
 
         Ok(())
     }

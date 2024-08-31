@@ -956,6 +956,9 @@ pub enum PerfFeature {
     /// Time spent getting the feedback from `is_interesting` from all objectives
     GetObjectivesInterestingAll = 9,
 
+    /// Time spent computing dataflow dependencies
+    ComputeDataflowDependencies = 10,
+
     /// Used as a counter to know how many elements are in [`PerfFeature`]. Must be the
     /// last value in the enum.
     Count, // !! No more values here since Count is last! !!
@@ -979,7 +982,10 @@ impl From<PerfFeature> for usize {
             }
             PerfFeature::GetObjectivesInterestingAll => {
                 PerfFeature::GetObjectivesInterestingAll as usize
-            }
+            },
+            PerfFeature::ComputeDataflowDependencies => {
+                PerfFeature::ComputeDataflowDependencies as usize
+            },
             PerfFeature::Count => PerfFeature::Count as usize,
         }
     }
@@ -999,6 +1005,7 @@ impl From<usize> for PerfFeature {
             7 => PerfFeature::PostExecObservers,
             8 => PerfFeature::GetFeedbackInterestingAll,
             9 => PerfFeature::GetObjectivesInterestingAll,
+            10 => PerfFeature::ComputeDataflowDependencies,
             _ => panic!("Unknown PerfFeature: {val}"),
         }
     }
