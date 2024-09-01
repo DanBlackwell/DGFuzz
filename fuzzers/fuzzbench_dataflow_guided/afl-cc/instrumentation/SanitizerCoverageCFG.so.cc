@@ -378,7 +378,6 @@ public:
   }
   bool runOnModule(Module &M) override {
     Options.TracePCGuard = 1;
-    Options.TraceCmp = 1;
     Options.NoPrune = 1;
     Options.CoverageType = SanitizerCoverageOptions::SCK_Edge;
     Options.IndirectCalls = true;
@@ -415,7 +414,6 @@ PreservedAnalyses ModuleSanitizerCoverageCFG::run(Module                &M,
                                                   ModuleAnalysisManager &MAM) {
 
   Options.TracePCGuard = 1;
-  Options.TraceCmp = 1;
   Options.NoPrune = 1;
   Options.CoverageType = SanitizerCoverageOptions::SCK_Edge;
   Options.IndirectCalls = true;
