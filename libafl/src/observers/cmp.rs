@@ -255,7 +255,6 @@ impl CmpValuesMetadata {
         }
 
         self.targeted_replacements = all_replacements.into_iter().collect();
-        println!("CmpLog targeted_replacements: {:?}", self.targeted_replacements);
     }
 }
 

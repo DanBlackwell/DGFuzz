@@ -87,6 +87,12 @@ pub extern "C" fn libafl_main() {
                 .help("The file to read Control Flow Graph from"),
         )
         .arg(
+            Arg::new("dfsan_cfg_file")
+                .short('a')
+                .long("dfsan_cfg_file")
+                .help("The file to read the DFSan Control Flow Graph from"),
+        )
+        .arg(
             Arg::new("backoff_factor")
                 .short('b')
                 .long("backoff_factor")
@@ -174,6 +180,7 @@ pub extern "C" fn libafl_main() {
     let tokens = res.get_one::<String>("tokens").map(PathBuf::from);
 
     let cfg_file = res.get_one::<String>("cfg_file").map(PathBuf::from);
+    let dfsan_cfg_file = res.get_one::<String>("dfsan_cfg_file").map(PathBuf::from);
 
     let dfsan_binary = res.get_one::<String>("dfsan_binary").map(PathBuf::from);
 
@@ -199,6 +206,7 @@ pub extern "C" fn libafl_main() {
         &in_dir,
         tokens,
         cfg_file,
+        dfsan_cfg_file,
         &logfile,
         timeout,
         backoff_factor,
@@ -238,6 +246,7 @@ fn fuzz(
     seed_dir: &PathBuf,
     tokenfile: Option<PathBuf>,
     cfg_file: Option<PathBuf>,
+    dfsan_cfg_file: Option<PathBuf>,
     logfile: &PathBuf,
     timeout: Duration,
     backoff_factor: f64,
@@ -423,6 +432,15 @@ fn fuzz(
 
             file = File::create("funcs.dot").unwrap();
             file.write_all(funcs_str.as_bytes()).unwrap();
+
+            if let Some(dfsan_cfg_file) = dfsan_cfg_file {
+                let mut dfsan_cfg = ControlFlowGraph::new();
+                let mut file = std::fs::File::open(dfsan_cfg_file)?;
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer)?;
+                dfsan_cfg.parse_from_buf(&buffer);
+                let mapping = control_flow_graph.produce_mapping_to_alt_cfg(&dfsan_cfg);
+            }
 
             state.add_metadata(control_flow_graph);
         }

@@ -522,13 +522,13 @@ where
             }
         }
 
-        // let Some((corpus_id, found_time)) = last_new else {
-        //     return Ok(());
-        // };
+        let Some((corpus_id, found_time)) = last_new else {
+            return Ok(());
+        };
 
-        // if found_time.elapsed() < std::time::Duration::from_secs(3) {
-        //     return Ok(());
-        // }
+        if found_time.elapsed() < std::time::Duration::from_secs(3) {
+            return Ok(());
+        }
 
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
 
@@ -680,7 +680,7 @@ where
                 let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
                 // if we've already tested every possible value for this edge...
                 if (dependent_bytes.len() == 1 && muts >= 256)
-                    || (dependent_bytes.len() == 2 && muts >= 65536 + 32768)
+                    || (dependent_bytes.len() == 2 && muts >= 65536)
                 {
                     continue;
                 }
@@ -807,7 +807,7 @@ where
                         .get_mut(target_bytes_pos)
                         .unwrap();
                     if (bytes.len() == 1 && *tested_vals >= 256)
-                        || (bytes.len() == 2 && *tested_vals >= 65536 + 32768)
+                        || (bytes.len() == 2 && *tested_vals >= 65536)
                     {
                         println!(
                             "Dataflow Finished all possible combos for {:?} ({tested_vals})",
@@ -820,16 +820,7 @@ where
                     if bytes.len() == 1 {
                         bytes[0] = *tested_vals as u8;
                     } else if bytes.len() == 2 {
-                        let array = if *tested_vals >= 65536 {
-                            // done alternating endianness, just whip through the rest BE
-                            ((*tested_vals - 32768) as u16).to_be_bytes()
-                        } else if *tested_vals % 2 == 0 {
-                            // test the next big-endian value
-                            ((*tested_vals / 2) as u16).to_be_bytes()
-                        } else {
-                            // test the next little-endian value
-                            ((*tested_vals / 2) as u16).to_le_bytes()
-                        };
+                        let array = (*tested_vals as u16).to_be_bytes();
 
                         bytes[0] = array[0];
                         bytes[1] = array[1];

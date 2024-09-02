@@ -384,18 +384,16 @@ impl SanCovPcTable {
         while iter < pcs_end {
             let entry = PcTableEntry {
                 addr: *iter,
-                flags: { iter = iter.wrapping_add(1); *iter },
+                flags: *(iter.wrapping_add(1)),
                 array_index
             };
-            iter = iter.wrapping_add(1);
+            iter = iter.wrapping_add(2);
             cov_sorted.push(entry);
             array_index += 1;
         }
 
         let mut addr_sorted: Vec<PcTableEntry> = cov_sorted.clone();
         addr_sorted.sort_by(|a, b| a.addr().partial_cmp(&b.addr()).unwrap());
-
-        println!("Populating SanCovPcTable with addr sorteD: {:?}", addr_sorted);
 
         Self {
             entries_sorted_cov_map_idx: cov_sorted,

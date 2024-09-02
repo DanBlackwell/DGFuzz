@@ -67,9 +67,9 @@ libafl_bolts::impl_serdeany!(ControlFlowGraphBB);
 /// Struct storing the control flow graph details
 pub struct ControlFlowGraph {
     /// A vec of all the edges
-    all_edges: Vec<ControlFlowGraphBB>,
+    pub(crate) all_edges: Vec<ControlFlowGraphBB>,
     /// returns a list of indexes (for self.all_edges) which are in the func with the given name
-    edges_in_func_named: HashMap<String, Vec<Vec<usize>>>,
+    pub(crate) edges_in_func_named: HashMap<String, Vec<Vec<usize>>>,
     /// returns an index for self.all_edges with the matching uuid
     edge_with_uuid: HashMap<BasicBlockUUID, usize>,
     /// returns an index for self.all_edges with the matching coverage map index
@@ -497,6 +497,43 @@ impl ControlFlowGraph {
         for func in funcs {
             self.neighbours_for_start_of_function(&func);
         }
+    }
+
+    pub fn produce_mapping_to_alt_cfg(&self, alt_cfg: &ControlFlowGraph) -> HashMap<CoverageMapIdx, CoverageMapIdx> {
+        let mut mapping = HashMap::new();
+        let mut mismatches = HashSet::new();
+
+        for (func, edge_lists) in &alt_cfg.edges_in_func_named {
+            let Some(self_edge_lists) = self.edges_in_func_named.get(func) else {
+                continue;
+            };
+
+            for (list_num, edge_list) in edge_lists.iter().enumerate() {
+                for (idx_in_list, all_edges_idx) in edge_list.iter().enumerate() {
+                    let Some(alt_cov_idx) = alt_cfg
+                        .all_edges[*all_edges_idx]
+                        .coverage_map_idx 
+                        else { 
+                            continue;
+                        };
+
+                    if self_edge_lists.len() <= list_num || 
+                        self_edge_lists[list_num].len() <= idx_in_list {
+                        continue;
+                    }
+                    let self_edge = &self.all_edges[self_edge_lists[list_num][idx_in_list]];
+                    let self_cov_idx = self_edge.coverage_map_idx.unwrap();
+                    if self_cov_idx != alt_cov_idx {
+                        mismatches.insert((self_cov_idx, alt_cov_idx));
+                    }
+                    mapping.insert(self_cov_idx, alt_cov_idx);
+                }
+            }
+        }
+
+        println!("Mismatches between this CFG and alt {}: {:?}", mismatches.len(), mismatches);
+
+        mapping
     }
 
     /// return a Vec of the coverage map indexes that can be directly reached from a function call
