@@ -378,6 +378,7 @@ public:
     Options.TracePCGuard = 1;
     Options.TraceCmp = 1;
     Options.NoPrune = 1;
+    Options.PCTable = 1;
     Options.CoverageType = SanitizerCoverageOptions::SCK_Edge;
     Options.IndirectCalls = true;
     ModuleSanitizerCoverageCFG ModuleSancov(Options, Allowlist.get(),
@@ -415,6 +416,7 @@ PreservedAnalyses ModuleSanitizerCoverageCFG::run(Module                &M,
   Options.TracePCGuard = 1;
   Options.TraceCmp = 1;
   Options.NoPrune = 1;
+  Options.PCTable = 1;
   Options.CoverageType = SanitizerCoverageOptions::SCK_Edge;
   Options.IndirectCalls = true;
   ModuleSanitizerCoverageCFG ModuleSancov(Options);
@@ -1357,15 +1359,15 @@ GlobalVariable *ModuleSanitizerCoverageCFG::CreateFunctionLocalArrayInSection(
     size_t NumElements, Function &F, Type *Ty, const char *Section) {
   ArrayType *ArrayTy = ArrayType::get(Ty, NumElements);
 
-    // Generate the sequence of constant integers
-    std::vector<Constant *> ArrayValues;
-    for (size_t i = 0; i < NumElements; ++i) {
-        Constant *Value = ConstantInt::get(Ty, CurrentCoverageIndex++);
-        ArrayValues.push_back(Value);
-    }
+  // Generate the sequence of constant integers
+  std::vector<Constant *> ArrayValues;
+  for (size_t i = 0; i < NumElements; ++i) {
+      Constant *Value = ConstantInt::get(Ty, CurrentCoverageIndex++);
+      ArrayValues.push_back(Value);
+  }
 
-    // Create the constant array using the generated values
-    Constant *ArrayInitializer = ConstantArray::get(ArrayTy, ArrayValues);
+  // Create the constant array using the generated values
+  Constant *ArrayInitializer = ConstantArray::get(ArrayTy, ArrayValues);
 
   auto Array = new GlobalVariable(
       *CurModule, ArrayTy, false, GlobalVariable::PrivateLinkage,
@@ -1415,8 +1417,24 @@ ModuleSanitizerCoverageCFG::CreatePCArray(Function &F,
           ConstantInt::get(IntptrTy, 0), IntptrPtrTy));
     }
   }
-  auto *PCArray = CreateFunctionLocalArrayInSection(N * 2, F, IntptrPtrTy,
-                                                    SanCovPCsSectionName);
+
+  ArrayType *ArrayTy = ArrayType::get(IntptrPtrTy, N * 2);
+  auto PCArray = new GlobalVariable(
+      *CurModule, ArrayTy, false, GlobalVariable::PrivateLinkage,
+      Constant::getNullValue(ArrayTy), "__sancov_gen_");
+
+  if (TargetTriple.supportsCOMDAT() &&
+      (TargetTriple.isOSBinFormatELF() || !F.isInterposable()))
+    if (auto Comdat = getOrCreateFunctionComdat(F, TargetTriple))
+      PCArray->setComdat(Comdat);
+  PCArray->setSection(getSectionName(SanCovPCsSectionName));
+  PCArray->setAlignment(Align(DL->getTypeStoreSize(IntptrPtrTy).getFixedValue()));
+
+  if (PCArray->hasComdat())
+    GlobalsToAppendToCompilerUsed.push_back(PCArray);
+  else
+    GlobalsToAppendToUsed.push_back(PCArray);
+                                                  
   PCArray->setInitializer(
       ConstantArray::get(ArrayType::get(IntptrPtrTy, N * 2), PCs));
   PCArray->setConstant(true);

@@ -9,7 +9,7 @@ use core::{
 };
 
 use ahash::RandomState;
-use libafl_bolts::{dataflow_metadata::libafl_path_filled, ownedref::OwnedMutSlice, AsSlice, AsSliceMut, HasLen, Named, Truncate};
+use libafl_bolts::{ownedref::OwnedMutSlice, AsSlice, AsSliceMut, HasLen, Named, Truncate};
 use num_traits::Bounded;
 use serde::{Deserialize, Serialize};
 
@@ -641,7 +641,6 @@ where
     /// Reset the map
     #[inline]
     fn reset_map(&mut self) -> Result<(), Error> {
-        unsafe { libafl_path_filled = 0; }
         // Normal memset, see https://rust.godbolt.org/z/Trs5hv
         let initial = self.initial();
         let cnt = self.usable_count();

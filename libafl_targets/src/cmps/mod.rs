@@ -18,7 +18,7 @@ use libafl::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use stages::*;
 
-use crate::{CMPLOG_MAP_H, CMPLOG_MAP_W};
+use crate::{CMPLOG_MAP_H, CMPLOG_MAP_W, SANCOV_PC_TABLE};
 
 // CONSTANTS
 
@@ -71,7 +71,7 @@ pub use libafl_cmplog_enabled as CMPLOG_ENABLED;
 #[repr(C)]
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CmpLogHeader {
-    prev_edge_idx: u32,
+    return_addr: usize,
     hits: u16,
     shape: u8,
     kind: u8,
@@ -328,8 +328,13 @@ impl CmpMap for CmpLogMap {
         CMPLOG_MAP_W
     }
 
-    fn prev_edge_index_for(&self, idx: usize) -> usize {
-        self.headers[idx].prev_edge_idx as usize
+    fn cov_map_idx_for(&self, idx: usize) -> usize {
+        let ret_addr = self.headers[idx].return_addr;
+        unsafe {
+            SANCOV_PC_TABLE.as_mut().unwrap()
+                .entry_containing_address(ret_addr).unwrap()
+                .cov_map_idx()
+        }
     }
 
     fn executions_for(&self, idx: usize) -> usize {
@@ -387,7 +392,7 @@ impl CmpMap for CmpLogMap {
     fn reset(&mut self) -> Result<(), Error> {
         // For performance, we reset just the headers
         self.headers.fill(CmpLogHeader {
-            prev_edge_idx: 0,
+            return_addr: 0,
             hits: 0,
             shape: 0,
             kind: 0,
@@ -402,7 +407,7 @@ impl CmpMap for CmpLogMap {
 #[allow(clippy::large_stack_arrays)]
 pub static mut libafl_cmplog_map: CmpLogMap = CmpLogMap {
     headers: [CmpLogHeader {
-        prev_edge_idx: 0,
+        return_addr: 0,
         hits: 0,
         shape: 0,
         kind: 0,
@@ -504,7 +509,7 @@ impl CmpMap for AFLppCmpLogMap {
         CMPLOG_MAP_W
     }
 
-    fn prev_edge_index_for(&self, _idx: usize) -> usize {
+    fn cov_map_idx_for(&self, _idx: usize) -> usize {
         0
     }
 

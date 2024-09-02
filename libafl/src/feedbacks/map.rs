@@ -11,7 +11,7 @@ use core::{
 };
 
 // #[rustversion::nightly]
-use libafl_bolts::{dataflow_metadata::{libafl_path_edge_idxs, libafl_path_filled, TestcaseDirectNeighboursMetadata}, AsSlice};
+use libafl_bolts::{dataflow_metadata::TestcaseDirectNeighboursMetadata, AsSlice};
 use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef},
     AsIter, HasRefCnt, Named
@@ -635,17 +635,14 @@ where
                     }
                 }
 
-                unsafe {
-                    let dn_meta = cfg_metadata.direct_neighbours_for_edges_in_path(
-                        &libafl_path_edge_idxs[0..libafl_path_filled as usize], &map_filled_set
-                    );
-                    testcase.add_metadata(dn_meta);
-                }
+                let indexes_meta = testcase.metadata::<MapIndexesMetadata>().unwrap();
+                let dn_meta = cfg_metadata.direct_neighbours_for_edges_in_path(
+                    &indexes_meta.list, &map_filled_set
+                );
+                testcase.add_metadata(dn_meta);
 
                 let meta = MapUncoveredNeighboursMetadata { 
                     all_reachable: vec![],
-                    // direct_neighbours: direct_neighbours.clone(), 
-                    // called_functions: HashSet::new(),
                 };
                 testcase.add_metadata(meta);
 

@@ -76,7 +76,7 @@ impl CmpValues {
 
 
 /// A state metadata holding a list of values logged from comparisons
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
     allow(clippy::unsafe_derive_deserialize)
@@ -151,13 +151,13 @@ impl CmpValuesMetadata {
         let dn_meta: &TestcaseDirectNeighboursMetadata = tc.metadata_map().get().unwrap();
         let input = tc.input().as_ref().unwrap();
 
+        let mut all_replacements: HashSet<TargetedCmpValReplace> = HashSet::new();
+
         for (bb_cov_map_idx, byte_indexes) in &df_meta.bytes_depended_on_by_uncovered_bb {
             if byte_indexes.is_empty() { continue; }
-            let Some(sancov_pred) = dn_meta.sancov_predecessor_for_edge.get(bb_cov_map_idx) else { continue; };
-            let Some(cmpvals) = self.map.get(sancov_pred) else { continue; };
+            let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) else { continue; };
+            let Some(cmpvals) = self.map.get(parent) else { continue; };
             if cmpvals.is_empty() { continue; }
-
-            // println!("Found cmpvals and byte-dependency map for {bb_cov_map_idx}");
 
             let trimmed_cmps = cmpvals.into_iter()
                 .map(|c| {
@@ -209,58 +209,53 @@ impl CmpValuesMetadata {
                 if cmp1.is_empty() { continue; }
 
                 // collect up matches for cmpval side 1
-                self.targeted_replacements.append(
-                    &mut memmem::find_iter(&byte_vals, &cmp1)
-                        .map(|idx| TargetedCmpValReplace {
-                            input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                            replacement_byte_values: cmp2.clone(),
-                            is_little_endian: false
-                        })
-                        .collect::<Vec<TargetedCmpValReplace>>()
-                );
+                memmem::find_iter(&byte_vals, &cmp1)
+                    .map(|idx| TargetedCmpValReplace {
+                        input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                        replacement_byte_values: cmp2.clone(),
+                        is_little_endian: false
+                    })
+                    .for_each(|v| { all_replacements.insert(v); });
                 // if it's 1 byte long we'll match it either direction
                 if cmp1.len() > 1 {
                     let rev = {let mut x = cmp1.clone(); x.reverse(); x};
-                    self.targeted_replacements.append(
-                        &mut memmem::find_iter(&byte_vals, &rev)
-                            .map(|idx| TargetedCmpValReplace {
-                                input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                                input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                replacement_byte_values: rev.clone(),
-                                is_little_endian: true
-                            })
-                            .collect::<Vec<TargetedCmpValReplace>>()
-                    );
-                }
-
-                // collect up matches for cmpval side 2
-                self.targeted_replacements.append(
-                    &mut memmem::find_iter(&byte_vals, &cmp2)
+                    memmem::find_iter(&byte_vals, &rev)
                         .map(|idx| TargetedCmpValReplace {
                             input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
                             input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                            replacement_byte_values: cmp1.clone(),
-                            is_little_endian: false
+                            replacement_byte_values: rev.clone(),
+                            is_little_endian: true
                         })
-                        .collect::<Vec<TargetedCmpValReplace>>()
-                );
+                        .for_each(|v| { all_replacements.insert(v); });
+                }
+
+                // collect up matches for cmpval side 2
+                memmem::find_iter(&byte_vals, &cmp2)
+                    .map(|idx| TargetedCmpValReplace {
+                        input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                        replacement_byte_values: cmp1.clone(),
+                        is_little_endian: false
+                    })
+                    .for_each(|v| { all_replacements.insert(v); });
                 // if it's 1 byte long we'll match it either direction
                 if cmp1.len() > 1 {
                     let rev = {let mut x = cmp2.clone(); x.reverse(); x};
-                    self.targeted_replacements.append(
-                        &mut memmem::find_iter(&byte_vals, &rev)
-                            .map(|idx| TargetedCmpValReplace {
-                                input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                                input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                replacement_byte_values: rev.clone(),
-                                is_little_endian: true
-                            })
-                            .collect::<Vec<TargetedCmpValReplace>>()
-                    );
+                    memmem::find_iter(&byte_vals, &rev)
+                        .map(|idx| TargetedCmpValReplace {
+                            input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
+                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                            replacement_byte_values: rev.clone(),
+                            is_little_endian: true
+                        })
+                        .for_each(|v| { all_replacements.insert(v); });
                 }
             }
         }
+
+        self.targeted_replacements = all_replacements.into_iter().collect();
+        println!("CmpLog targeted_replacements: {:?}", self.targeted_replacements);
     }
 }
 
@@ -326,11 +321,12 @@ where
                     }
                 }
 
-                if !self.map.contains_key(&cmp_map.prev_edge_index_for(i)) {
-                    self.map.insert(cmp_map.prev_edge_index_for(i), vec![]);
+                let cov_map_idx = cmp_map.cov_map_idx_for(i);
+                if !self.map.contains_key(&cov_map_idx) {
+                    self.map.insert(cov_map_idx, vec![]);
                 }
                 let vals = self.map
-                    .get_mut(&cmp_map.prev_edge_index_for(i))
+                    .get_mut(&cov_map_idx)
                     .unwrap();
 
                 for j in 0..execs {
@@ -357,8 +353,8 @@ pub trait CmpMap: Debug {
         self.len() == 0
     }
 
-    /// Get the previous edge index for the cmp at `idx`
-    fn prev_edge_index_for(&self, idx: usize) -> usize;
+    /// Get the coverage map index for the cmp at `idx`
+    fn cov_map_idx_for(&self, idx: usize) -> usize;
 
     /// Get the number of executions for a cmp
     fn executions_for(&self, idx: usize) -> usize;

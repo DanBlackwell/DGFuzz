@@ -522,13 +522,13 @@ where
             }
         }
 
-        let Some((corpus_id, found_time)) = last_new else {
-            return Ok(());
-        };
+        // let Some((corpus_id, found_time)) = last_new else {
+        //     return Ok(());
+        // };
 
-        if found_time.elapsed() < std::time::Duration::from_secs(3) {
-            return Ok(());
-        }
+        // if found_time.elapsed() < std::time::Duration::from_secs(3) {
+        //     return Ok(());
+        // }
 
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
 

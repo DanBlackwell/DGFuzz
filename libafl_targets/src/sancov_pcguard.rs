@@ -1,5 +1,8 @@
 //! [`LLVM` `PcGuard`](https://clang.llvm.org/docs/SanitizerCoverage.html#tracing-pcs-with-guards) runtime for `LibAFL`.
 
+use alloc::vec::Vec;
+use hashbrown::HashMap;
+
 #[rustversion::nightly]
 #[cfg(feature = "sancov_ngram4")]
 use core::simd::num::SimdUint;
@@ -21,8 +24,6 @@ use crate::coverage::MAX_EDGES_FOUND;
 use crate::EDGES_MAP_SIZE_IN_USE;
 #[cfg(feature = "pointer_maps")]
 use crate::{coverage::EDGES_MAP_PTR, EDGES_MAP_SIZE_MAX};
-
-use libafl_bolts::dataflow_metadata::{libafl_path_edge_idxs, libafl_path_filled};
 
 use once_cell::unsync::Lazy;
 use std::collections::HashSet;
@@ -214,6 +215,8 @@ extern "C" {
     pub static mut __afl_prev_ctx: u32;
 }
 
+static mut pc_guard_array_index_to_guard_value: Option<HashMap<usize, usize>> = None;
+
 /// Callback for sancov `pc_guard` - usually called by `llvm` on each block or edge.
 ///
 /// # Safety
@@ -223,10 +226,6 @@ extern "C" {
 #[allow(unused_assignments)]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     libafl_last_seen_edge_idx = *guard;
-    if (libafl_path_filled as usize) < libafl_path_edge_idxs.len() {
-        libafl_path_edge_idxs[libafl_path_filled as usize] = *guard;
-        libafl_path_filled += 1;
-    }
 
     #[allow(unused_mut)]
     let mut pos = *guard as usize;
@@ -281,17 +280,24 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
         EDGES_MAP_PTR = EDGES_MAP.as_mut_ptr();
     }
 
-    libafl_path_filled = 0;
-
     if start == stop {
         //|| *start != 0 {
         return;
     }
 
+    unsafe {
+        pc_guard_array_index_to_guard_value = Some(HashMap::new());
+    }
     let mut seen = vec![];
     let mut set_seen = HashSet::new();
     let mut dupes = vec![];
+    let mut index = 0;
     while start < stop {
+        unsafe {
+            pc_guard_array_index_to_guard_value.as_mut().unwrap()
+                .insert(index, *start as usize);
+        }
+        index += 1;
         seen.push(*start);
         SEEN_GUARDS.insert(*start);
         if !set_seen.insert(*start) {
@@ -311,6 +317,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
 
 static mut PCS_BEG: *const usize = ptr::null();
 static mut PCS_END: *const usize = ptr::null();
+pub static mut SANCOV_PC_TABLE: Option<SanCovPcTable> = None;
 
 #[no_mangle]
 unsafe extern "C" fn __sanitizer_cov_pcs_init(pcs_beg: *const usize, pcs_end: *const usize) {
@@ -324,16 +331,15 @@ unsafe extern "C" fn __sanitizer_cov_pcs_init(pcs_beg: *const usize, pcs_end: *c
         "__sanitizer_cov_pcs_init can be called only once."
     );
 
-    PCS_BEG = pcs_beg;
-    PCS_END = pcs_end;
+    SANCOV_PC_TABLE = Some(SanCovPcTable::new(pcs_beg, pcs_end));
 }
 
 /// An entry to the `sanitizer_cov` `pc_table`
-#[repr(C, packed)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PcTableEntry {
     addr: usize,
     flags: usize,
+    array_index: usize,
 }
 
 impl PcTableEntry {
@@ -348,35 +354,78 @@ impl PcTableEntry {
     pub fn addr(&self) -> usize {
         self.addr
     }
+
+    /// Returns the coverage map index associated with this PC.
+    #[must_use]
+    pub fn cov_map_idx(&self) -> usize {
+        unsafe {
+            **pc_guard_array_index_to_guard_value
+                .as_ref().unwrap()
+                .get(&self.array_index).as_ref().unwrap()
+        }
+    }
 }
 
-/// Returns a slice containing the PC table.
-#[must_use]
-pub fn sanitizer_cov_pc_table() -> Option<&'static [PcTableEntry]> {
-    // SAFETY: Once PCS_BEG and PCS_END have been initialized, will not be written to again. So
-    // there's no TOCTOU issue.
-    unsafe {
-        if PCS_BEG.is_null() || PCS_END.is_null() {
-            return None;
+#[derive(Debug)]
+pub struct SanCovPcTable {
+    entries_sorted_cov_map_idx: Vec<PcTableEntry>,
+    entries_sorted_addr: Vec<PcTableEntry>,
+    entry_for_address_cache: HashMap<usize, PcTableEntry>
+}
+
+impl SanCovPcTable {
+    pub(crate) unsafe fn new(pcs_beg: *const usize, pcs_end: *const usize) -> Self {
+        // SAFETY: Once pcs_beg and pcs_end have been initialized, will not be written to again. So
+        // there's no TOCTOU issue.
+        assert!(!pcs_beg.is_null() && !pcs_end.is_null());
+        let mut cov_sorted = vec![];
+        let mut iter = pcs_beg;
+        let mut array_index = 0;
+        while iter < pcs_end {
+            let entry = PcTableEntry {
+                addr: *iter,
+                flags: { iter = iter.wrapping_add(1); *iter },
+                array_index
+            };
+            iter = iter.wrapping_add(1);
+            cov_sorted.push(entry);
+            array_index += 1;
         }
-        let len = PCS_END.offset_from(PCS_BEG);
-        assert!(
-            len > 0,
-            "Invalid PC Table bounds - start: {PCS_BEG:x?} end: {PCS_END:x?}"
-        );
-        assert_eq!(
-            len % 2,
-            0,
-            "PC Table size is not evens - start: {PCS_BEG:x?} end: {PCS_END:x?}"
-        );
-        assert_eq!(
-            (PCS_BEG as usize) % mem::align_of::<PcTableEntry>(),
-            0,
-            "Unaligned PC Table - start: {PCS_BEG:x?} end: {PCS_END:x?}"
-        );
-        Some(slice::from_raw_parts(
-            PCS_BEG as *const PcTableEntry,
-            (len / 2).try_into().unwrap(),
-        ))
+
+        let mut addr_sorted: Vec<PcTableEntry> = cov_sorted.clone();
+        addr_sorted.sort_by(|a, b| a.addr().partial_cmp(&b.addr()).unwrap());
+
+        println!("Populating SanCovPcTable with addr sorteD: {:?}", addr_sorted);
+
+        Self {
+            entries_sorted_cov_map_idx: cov_sorted,
+            entries_sorted_addr: addr_sorted,
+            entry_for_address_cache: HashMap::new()
+        }
+    }
+
+    pub fn entry_containing_address(&mut self, address: usize) -> Option<PcTableEntry> {
+        if let Some(entry) = self.entry_for_address_cache.get(&address) {
+            return Some(entry.clone());
+        }
+
+        let pos = self.entries_sorted_addr.binary_search_by(|probe| probe.addr().cmp(&address));
+        let entry = match pos {
+            Ok(idx) => Some(self.entries_sorted_addr[idx].clone()),
+            Err(idx) => {
+                if idx == 0 { 
+                    None 
+                } else { 
+                    Some(self.entries_sorted_addr[idx - 1].clone()) 
+                }
+            }
+        };
+
+        if let Some(entry) = entry {
+            self.entry_for_address_cache.insert(address, entry.clone());
+            Some(entry)
+        } else {
+            None
+        }
     }
 }

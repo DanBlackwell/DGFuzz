@@ -843,13 +843,13 @@ impl ControlFlowGraph {
     /// Return a map from parent edges to a list of their direct neighbours (descendents)
     pub fn direct_neighbours_for_edges_in_path(
         &mut self, 
-        path_cov_map_idxs: &[u32],
+        covered_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>,
     ) -> TestcaseDirectNeighboursMetadata {
         // populate the mapping from edge index to uncovered siblings
         let mut siblings_for_covered_bb = HashMap::new();
-        let covered_idxs = path_cov_map_idxs.iter().map(|x| *x as usize).collect::<HashSet<usize>>();
-        for idx in &covered_idxs {
+        let mut parent_for_uncovered_bb = HashMap::new();
+        for idx in covered_indexes {
             let bb = &self.all_edges[*idx];
             let mut covered_succs = vec![];
             let mut uncovered_succs = vec![];
@@ -859,7 +859,7 @@ impl ControlFlowGraph {
                 let succ_idx = succ_cov_map_idx.0 as usize;
                 if !all_coverage_map_indexes.contains(&succ_idx) {
                     uncovered_succs.push(succ_idx);
-                } else if covered_idxs.contains(&succ_idx) {
+                } else if covered_indexes.contains(&succ_idx) {
                     covered_succs.push(succ_idx);
                 }
             }
@@ -868,50 +868,16 @@ impl ControlFlowGraph {
                 for covered_succ in covered_succs {
                     siblings_for_covered_bb.insert(covered_succ, uncovered_succs.clone());
                 }
-            }
-        }
 
-        let mut sancov_predecessor_for_edge: HashMap<usize, usize> = HashMap::new();
-
-        let mut prev_cov_map_idx = path_cov_map_idxs[0];
-        let mut sought_stack: Vec<HashSet<usize>> = vec![];
-        for (start_pos, cov_map_idx) in path_cov_map_idxs.iter().enumerate() {
-            if sought_stack.last().is_some_and(|sought| sought.contains(&(*cov_map_idx as usize))) {
-                let successors = sought_stack.pop().unwrap()
-                    .into_iter()
-                    .filter(|cov_map_idx| !all_coverage_map_indexes.contains(cov_map_idx))
-                    .collect::<HashSet<usize>>();
-
-                if !successors.is_empty() {
-                    // now assign these successors to the last block we saw
-                    for succ in successors {
-                        sancov_predecessor_for_edge.insert(succ, prev_cov_map_idx as usize);
-                    }
+                for uncovered_succ in uncovered_succs {
+                    parent_for_uncovered_bb.insert(uncovered_succ, *idx);
                 }
             }
-
-            prev_cov_map_idx = *cov_map_idx;
-
-            let bb = &self.all_edges[*cov_map_idx as usize];
-            // boring
-            if bb.successor_uuids.len() < 2 || start_pos == path_cov_map_idxs.len() - 1 {
-                continue;
-            }
-
-            let mut successors = HashSet::new();
-            for succ in &bb.successor_uuids {
-                if let Some(cov_map_idx) = &self.all_edges[self.edge_with_uuid[succ]].coverage_map_idx {
-                    successors.insert(cov_map_idx.0 as usize);
-                }
-            }
-
-            sought_stack.push(successors); 
-        }
-        
-        if !sought_stack.is_empty() {
-            println!("Failed to find successors from the following stack: {:?}, path_len: {}", sought_stack, path_cov_map_idxs.len());
         }
 
-        TestcaseDirectNeighboursMetadata { sancov_predecessor_for_edge, siblings_for_covered_bb }
+        TestcaseDirectNeighboursMetadata { 
+            siblings_for_covered_bb, 
+            parent_for_uncovered_bb 
+        }
     }
 }

@@ -427,6 +427,7 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         false,
     );
 
+    cxxflags.push("-g".to_string());
     for pass in &[
         "function-logging.cc",
         "cmplog-routines-pass.cc",
