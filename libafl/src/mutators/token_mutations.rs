@@ -30,6 +30,7 @@ use crate::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
     }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata}, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
 };
+use crate::prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata};
 
 /// A state metadata holding a list of tokens
 #[allow(clippy::unsafe_derive_deserialize)]
@@ -514,7 +515,16 @@ where
         if state.rand_mut().below(2) == 1 {
             let res = self.targeted_replace(state, input)?;
             // if there were no exact matches fall back to standard cmplog
-            if res == MutationResult::Mutated { return Ok(res); }
+            if res == MutationResult::Mutated { 
+                if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+                    meta.current_mutation_type = DiscoveryMutationType::TargetedCmpLog;
+                }
+                return Ok(res); 
+            }
+        }
+
+        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+            meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
         }
 
         let cmps_len = {
@@ -533,7 +543,7 @@ where
         let len = input.bytes().len();
         let bytes = input.bytes_mut();
 
-        let meta = state.metadata_map().get::<CmpValuesMetadata>().unwrap();
+        let meta = state.metadata::<CmpValuesMetadata>().unwrap();
         let cmp_values = &meta.list[idx];
 
         let mut result = MutationResult::Skipped;

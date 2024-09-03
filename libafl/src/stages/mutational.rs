@@ -16,6 +16,7 @@ use crate::{
     start_timer,
     state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasRand, UsesState},
     Error, HasMetadata, HasNamedMetadata,
+    prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata}
 };
 #[cfg(feature = "introspection")]
 use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
@@ -82,7 +83,7 @@ where
     M: Mutator<I, Self::State>,
     EM: UsesState<State = Self::State>,
     Z: Evaluator<E, EM, State = Self::State>,
-    Self::State: HasCorpus,
+    Self::State: HasCorpus + HasMetadata,
     I: MutatedTransform<Self::Input, Self::State> + Clone,
 {
     /// The mutator registered for this stage
@@ -108,6 +109,10 @@ where
     ) -> Result<(), Error> {
         start_timer!(state);
 
+        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+            meta.current_mutation_type = DiscoveryMutationType::StandardHavoc;
+        }
+
         // Here saturating_sub is needed as self.iterations() might be actually smaller than the previous value before reset.
         /*
         let num = self
@@ -116,7 +121,7 @@ where
         */
         let num = self.iterations(state)?;
         let mut testcase = state.current_testcase_mut()?;
-        if let Ok(meta) = testcase.metadata_mut::<TestcaseMutationsMetadata>() {
+        if let Some(meta) = testcase.metadata_map_mut().get_mut::<TestcaseMutationsMetadata>() {
             meta.num_mutations_executed += num;
         } else {
             testcase.add_metadata(

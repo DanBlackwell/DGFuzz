@@ -1,6 +1,6 @@
 //! Map feedback, maximizing or minimizing maps, for example the afl-style map observer.
 
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use alloc::{borrow::Cow, vec::Vec};
 #[rustversion::nightly]
 use core::simd::prelude::SimdOrd;
@@ -287,6 +287,39 @@ impl MapIndexesMetadata {
     }
 }
 
+/// The Mutation Category that led to a coverage discovery
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, Eq, PartialEq)]
+pub enum DiscoveryMutationType {
+    Initialisation,
+    StandardCmpLog,
+    TargetedCmpLog,
+    DataflowGuidedHavoc,
+    StandardHavoc
+}
+
+/// Metadata to store info tracking how much novelty each mutation type found
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiscoveriesMutationTypeMetadata {
+    /// The current mutation type - must be set within the relevant stage!
+    pub current_mutation_type: DiscoveryMutationType,
+    /// The number of new edges found by each mutation type
+    pub num_edges_discovered_by_mutation_type: HashMap<DiscoveryMutationType, usize>,
+}
+
+libafl_bolts::impl_serdeany!(DiscoveriesMutationTypeMetadata);
+
+impl DiscoveriesMutationTypeMetadata {
+    fn add_novelties(&mut self, count: usize) {
+        if count == 0 { return; }
+        if let Some(total) = self.num_edges_discovered_by_mutation_type.get_mut(&self.current_mutation_type) {
+            *total += count;
+        } else {
+            self.num_edges_discovered_by_mutation_type.insert(self.current_mutation_type, count);
+        }
+        println!("Novelties breakdown: {:?}", self.num_edges_discovered_by_mutation_type);
+    }
+}
+
 /// A testcase metadata holding a list of indexes of a map
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(
@@ -296,6 +329,8 @@ impl MapIndexesMetadata {
 pub struct MapNoveltiesMetadata {
     /// A `list` of novelties.
     pub list: Vec<usize>,
+    /// The mutation type that discovered this
+    pub mutation_type: Option<DiscoveryMutationType>
 }
 
 libafl_bolts::impl_serdeany!(MapNoveltiesMetadata);
@@ -314,14 +349,6 @@ impl DerefMut for MapNoveltiesMetadata {
     #[must_use]
     fn deref_mut(&mut self) -> &mut [usize] {
         &mut self.list
-    }
-}
-
-impl MapNoveltiesMetadata {
-    /// Creates a new [`struct@MapNoveltiesMetadata`]
-    #[must_use]
-    pub fn new(list: Vec<usize>) -> Self {
-        Self { list }
     }
 }
 
@@ -544,7 +571,15 @@ where
         let mut novelties = vec![];
         if let Some(taken) = self.novelties.as_mut().map(core::mem::take) {
             novelties = taken;
-            let meta = MapNoveltiesMetadata::new(novelties.clone());
+            let meta = MapNoveltiesMetadata {
+                list: novelties.clone(),
+                mutation_type: {
+                    state
+                        .metadata_map()
+                        .get::<DiscoveriesMutationTypeMetadata>()
+                        .map(|m| m.current_mutation_type)
+                }
+            };
             testcase.add_metadata(meta);
         }
         let observer = observers.get(&self.map_ref).unwrap().as_ref();
@@ -554,6 +589,7 @@ where
             .get_mut::<MapFeedbackMetadata<T>>(&self.name)
             .unwrap();
         let len = observer.len();
+        let mut unseen_edges = 0;
         if map_state.history_map.len() < len {
             map_state.history_map.resize(len, observer.initial());
         }
@@ -571,6 +607,7 @@ where
             {
                 if history_map[i] == initial {
                     map_state.num_covered_map_indexes += 1;
+                    unseen_edges += 1;
                 }
                 history_map[i] = R::reduce(history_map[i], value);
                 indices.push(i);
@@ -587,6 +624,7 @@ where
             {
                 if history_map[i] == initial {
                     map_state.num_covered_map_indexes += 1;
+                    unseen_edges += 1;
                 }
                 history_map[i] = R::reduce(history_map[i], value);
             }
@@ -618,6 +656,10 @@ where
                 .filter(|(_idx,val)| **val != T::default())
                 .map(|(idx,_)| idx)
                 .collect::<HashSet<usize>>();
+
+            state.metadata_map_mut()
+                .get_mut::<DiscoveriesMutationTypeMetadata>()
+                .map(|meta| meta.add_novelties(unseen_edges));
 
             if let Ok(cfg_metadata) = state.metadata_mut::<ControlFlowGraph>() {
                 cfg_metadata.check_for_functions_needing_recalc(&novelties);

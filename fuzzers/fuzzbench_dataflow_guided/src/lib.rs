@@ -3,6 +3,8 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+use hashbrown::HashMap;
+
 use core::{cell::RefCell, time::Duration};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, FromRawFd};
@@ -29,6 +31,7 @@ use libafl::{
         StdScheduledMutator, Tokens,
     },
     observers::{CanTrack, HitcountsMapObserver, TimeObserver},
+    prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata},
     schedulers::prescient_weighted::PrescientProbabilitySamplingScheduler,
     stages::{calibrate::CalibrationStage, StdMutationalStage, TracingStage},
     state::{HasCorpus, StdState},
@@ -514,6 +517,12 @@ fn fuzz(
                 )
             }
         };
+
+        // Initialise the discovery tracking
+        state.add_metadata(DiscoveriesMutationTypeMetadata {
+            current_mutation_type: DiscoveryMutationType::Initialisation,
+            num_edges_discovered_by_mutation_type: HashMap::new()
+        });
 
         // To let know the AFL++ binary that we have a big map
         std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));

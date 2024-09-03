@@ -45,6 +45,7 @@ use libafl::{
     start_timer,
     state::{HasCorpus, HasRand, UsesState},
     Error, Evaluator, ExecuteInputResult, HasObjective,
+    prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata}
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -530,6 +531,10 @@ where
             return Ok(());
         }
 
+        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+            meta.current_mutation_type = DiscoveryMutationType::DataflowGuidedHavoc;
+        }
+
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
 
         let full_neighbours_meta = state.metadata::<MapNeighboursFeedbackMetadata>().unwrap();
@@ -543,8 +548,6 @@ where
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             let start = std::time::Instant::now();
-            // let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
-            // let covered_indexes = covered_meta.list.clone();
 
             let siblings_for_covered_bb: HashMap<usize, Vec<usize>> = {
                 let siblings_for_covered_bb = &mut tc
@@ -561,11 +564,7 @@ where
                 siblings_for_covered_bb.clone()
             };
             drop(tc);
-            // let mut sorted_all = covered_blocks.clone().into_iter().collect::<Vec<usize>>();
-            // sorted_all.sort();
-            // println!("{:?}: covered_indexes: {:?}, direct neighbours: {:?}, all_covered_blocks: {:?}", idx, covered_indexes, direct_neighbours_for_edge, sorted_all);
 
-            // let required_edges: Vec<usize> = covered_indexes; //direct_neighbours_for_edge.keys().copied().collect();
             let required_edges: Vec<usize> = siblings_for_covered_bb.keys().copied().collect();
             let bytes_depended_on_by_bb = self.get_bytes_depended_on_by_edges(
                 fuzzer,
@@ -679,8 +678,8 @@ where
                 }
                 let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
                 // if we've already tested every possible value for this edge...
-                if (dependent_bytes.len() == 1 && muts >= 256)
-                    || (dependent_bytes.len() == 2 && muts >= 65536)
+                if dependent_bytes.len() == 1 && muts >= 256
+                    // || (dependent_bytes.len() == 2 && muts >= 65536)
                 {
                     continue;
                 }
@@ -787,7 +786,7 @@ where
                 let mut input = target_bytes_input.clone();
 
                 start_timer!(state);
-                let altered_bytes = if input.bytes().len() >= 3 {
+                let altered_bytes = if input.bytes().len() > 1 {
                     // There are a few bytes to mutate here, use the mutator
                     let mutated = mutator.mutate(state, &mut input).unwrap();
 
@@ -797,7 +796,7 @@ where
 
                     input.bytes()
                 } else {
-                    // There are 1 or 2 bytes here - we can do an exhaustive search
+                    // There is a single byte here - we can do an exhaustive search
                     let bytes = input.bytes_mut();
 
                     let mut tc = state.corpus_mut().get(idx).unwrap().borrow_mut();
@@ -806,9 +805,7 @@ where
                         .mutations_tested_on_target_bytes
                         .get_mut(target_bytes_pos)
                         .unwrap();
-                    if (bytes.len() == 1 && *tested_vals >= 256)
-                        || (bytes.len() == 2 && *tested_vals >= 65536)
-                    {
+                    if bytes.len() == 1 && *tested_vals >= 256 {
                         println!(
                             "Dataflow Finished all possible combos for {:?} ({tested_vals})",
                             *target_bytes_pos
@@ -819,11 +816,6 @@ where
 
                     if bytes.len() == 1 {
                         bytes[0] = *tested_vals as u8;
-                    } else if bytes.len() == 2 {
-                        let array = (*tested_vals as u16).to_be_bytes();
-
-                        bytes[0] = array[0];
-                        bytes[1] = array[1];
                     } else {
                         panic!("Not implemented!")
                     }
@@ -840,6 +832,12 @@ where
                     bytes[*dest_pos] = altered_bytes[arr_idx];
                 }
 
+                let pre_covered = state
+                    .metadata::<MapNeighboursFeedbackMetadata>()
+                    .unwrap()
+                    .covered_blocks
+                    .len();
+
                 // Time is measured directly the `evaluate_input` function
                 let (untransformed, post) = input.try_transform_into(state).unwrap();
                 start_timer!(state);
@@ -848,9 +846,16 @@ where
                 mark_feature_time!(state, PerfFeature::TargetExecution);
 
                 if result == ExecuteInputResult::Corpus {
+                    let post_covered = state
+                        .metadata::<MapNeighboursFeedbackMetadata>()
+                        .unwrap()
+                        .covered_blocks
+                        .len();
+                    let novs = post_covered - pre_covered;
                     println!(
-                        "Dataflow stage found a new corpus entry! (through exhaustive testing: {})",
-                        target_bytes_input.len() < 3
+                        "Dataflow stage found a new corpus entry{}! (through exhaustive testing: {})",
+                        if novs > 0 { format!(" with {} novelties", novs) } else { format!("") },
+                        target_bytes_input.len() < 2
                     );
                 }
 
