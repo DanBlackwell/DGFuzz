@@ -449,6 +449,14 @@ fn fuzz(
         }
     }
 
+    if state.metadata::<DiscoveriesMutationTypeMetadata>().is_err() {
+        // Initialise the discovery tracking
+        state.add_metadata(DiscoveriesMutationTypeMetadata {
+            current_mutation_type: DiscoveryMutationType::Initialisation,
+            num_edges_discovered_by_mutation_type: HashMap::new()
+        });
+    }
+
     // In case the corpus is empty (on first run), reset
     if state.must_load_initial_inputs() {
         state
@@ -517,14 +525,6 @@ fn fuzz(
                 )
             }
         };
-
-        if state.metadata::<DiscoveriesMutationTypeMetadata>().is_err() {
-            // Initialise the discovery tracking
-            state.add_metadata(DiscoveriesMutationTypeMetadata {
-                current_mutation_type: DiscoveryMutationType::Initialisation,
-                num_edges_discovered_by_mutation_type: HashMap::new()
-            });
-        }
 
         // To let know the AFL++ binary that we have a big map
         std::env::set_var("AFL_MAP_SIZE", format!("{}", MAP_SIZE));

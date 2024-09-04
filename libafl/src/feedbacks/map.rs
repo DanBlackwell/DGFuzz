@@ -645,11 +645,6 @@ where
 
         {
             let coverage_map = history_map.to_vec();
-            let map_filled_set = history_map.iter()
-                .enumerate()
-                .filter(|(_idx,val)| **val != T::default())
-                .map(|(idx,_)| idx)
-                .collect::<HashSet<usize>>();
 
             state.metadata_map_mut()
                 .get_mut::<DiscoveriesMutationTypeMetadata>()
