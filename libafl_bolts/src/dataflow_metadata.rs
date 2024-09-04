@@ -15,8 +15,10 @@ crate::impl_serdeany!(FuzzerDataflowMetadata);
 /// Metadata indicating the direct neighbours for each edge (for a given testcase)
 /// We need this because of indirect function calls not being resolvable otherwise
 pub struct TestcaseDirectNeighboursMetadata {
-    /// Map from a covered edge to the list of direct uncovered siblings
-    pub siblings_for_covered_bb: HashMap<usize, Vec<usize>>,
+    /// Map from a covered edge to the list of all siblings not covered by with input
+    pub locally_uncovered_siblings_for_covered_bb: HashMap<usize, Vec<usize>>,
+    /// Map from a covered edge to the list of all siblings not covered by any corpus entry
+    pub globally_uncovered_siblings_for_covered_bb: HashMap<usize, Vec<usize>>,
     /// Map from uncovered bb coverage map index to parent coverage map index
     pub parent_for_uncovered_bb: HashMap<usize, usize>,
 }

@@ -228,8 +228,6 @@ where
 pub struct MapNeighboursFeedbackMetadata {
     /// Vec containing a list of hitcounts (each index corresponds to the hitmap index)
     pub hitcounts: Vec<usize>,
-    /// Set of all block indexes reachable from the current corpus
-    pub reachable_blocks: HashSet<usize>,
     /// Set of all block indexes that have been covered by the current corpus
     pub covered_blocks: HashSet<usize>,
     /// List of the corpusIds that were present last time the queue weightings were
@@ -517,7 +515,6 @@ where
         state.add_metadata(
             MapNeighboursFeedbackMetadata { 
                 hitcounts: vec![], 
-                reachable_blocks: HashSet::new(),
                 covered_blocks: HashSet::new(),
                 corpus_ids_present_at_recalc: vec![],
             }, 
@@ -647,9 +644,6 @@ where
         let len = history_map.len();
 
         {
-            use std::time::Instant;
-            let _now = Instant::now();
-
             let coverage_map = history_map.to_vec();
             let map_filled_set = history_map.iter()
                 .enumerate()
@@ -678,8 +672,9 @@ where
                 }
 
                 let indexes_meta = testcase.metadata::<MapIndexesMetadata>().unwrap();
+                let indexes_set: HashSet<usize> = indexes_meta.list.clone().into_iter().collect();
                 let dn_meta = cfg_metadata.direct_neighbours_for_edges_in_path(
-                    &indexes_meta.list, &map_filled_set
+                    &indexes_meta.list, &indexes_set
                 );
                 testcase.add_metadata(dn_meta);
 
@@ -701,9 +696,8 @@ where
                     println!("resized counts to {}", counts.len());
                 }
 
-                for &idx in &novelties {
+                for &idx in &indexes_set {
                     counts[idx] = 0;
-                    neighbours_state.reachable_blocks.remove(&idx);
                     neighbours_state.covered_blocks.insert(idx);
                 }
                 for idx in direct_neighbours {
@@ -712,11 +706,6 @@ where
                     counts[idx] += 1;
                 }
             }
-
-            // recalc the reachable set for any entries we have just glanced across
-            let novelties_set = novelties.into_iter().collect::<HashSet<usize>>();
-            println!("Novelties: {:?}", novelties_set);
-
         }
 
         // opt: if not tracking optimisations, we technically don't show the *current* history

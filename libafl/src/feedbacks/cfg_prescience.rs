@@ -877,43 +877,61 @@ impl ControlFlowGraph {
         called
     }
 
-    /// Return a map from parent edges to a list of their direct neighbours (descendents)
+    /// Return `TestcaseDirectNeighboursMetadata` 
     pub fn direct_neighbours_for_edges_in_path(
         &mut self, 
         covered_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>,
     ) -> TestcaseDirectNeighboursMetadata {
-        // populate the mapping from edge index to uncovered siblings
-        let mut siblings_for_covered_bb = HashMap::new();
+        let mut locally_uncovered_siblings_for_covered_bb = HashMap::new();
+        let mut globally_uncovered_siblings_for_covered_bb = HashMap::new();
         let mut parent_for_uncovered_bb = HashMap::new();
+        let locally_covered_set: HashSet<usize> = covered_indexes.clone()
+            .into_iter().copied().collect();
+
         for idx in covered_indexes {
             let bb = &self.all_edges[*idx];
             let mut covered_succs = vec![];
-            let mut uncovered_succs = vec![];
+            let mut locally_uncovered_succs = vec![];
+            let mut globally_uncovered_succs = vec![];
             for succ_uuid in &bb.successor_uuids {
                 let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid]]
                     .coverage_map_idx else { continue; };
                 let succ_idx = succ_cov_map_idx.0 as usize;
                 if !all_coverage_map_indexes.contains(&succ_idx) {
-                    uncovered_succs.push(succ_idx);
-                } else if covered_indexes.contains(&succ_idx) {
+                    globally_uncovered_succs.push(succ_idx);
+                } 
+                if !locally_covered_set.contains(&succ_idx) {
+                    locally_uncovered_succs.push(succ_idx);
+                } else {
                     covered_succs.push(succ_idx);
                 }
             }
 
-            if !uncovered_succs.is_empty() {
-                for covered_succ in covered_succs {
-                    siblings_for_covered_bb.insert(covered_succ, uncovered_succs.clone());
+            if !globally_uncovered_succs.is_empty() {
+                for covered_succ in &covered_succs {
+                    globally_uncovered_siblings_for_covered_bb.insert(
+                        *covered_succ, globally_uncovered_succs.clone()
+                    );
                 }
 
-                for uncovered_succ in uncovered_succs {
+                if !locally_uncovered_succs.is_empty() {
+                    for covered_succ in covered_succs {
+                        locally_uncovered_siblings_for_covered_bb.insert(
+                            covered_succ, locally_uncovered_succs.clone()
+                        );
+                    }
+                }
+
+                for uncovered_succ in locally_uncovered_succs {
                     parent_for_uncovered_bb.insert(uncovered_succ, *idx);
                 }
             }
         }
 
         TestcaseDirectNeighboursMetadata { 
-            siblings_for_covered_bb, 
+            locally_uncovered_siblings_for_covered_bb,
+            globally_uncovered_siblings_for_covered_bb, 
             parent_for_uncovered_bb 
         }
     }

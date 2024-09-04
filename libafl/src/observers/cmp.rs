@@ -14,6 +14,7 @@ use libafl_bolts::{dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectN
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{corpus::Corpus, executors::ExitKind, inputs::{BytesInput, HasMutatorBytes, UsesInput}, observers::Observer, state::HasCorpus, Error, HasMetadata};
+use crate::prelude::MapNeighboursFeedbackMetadata;
 
 /// Generic metadata trait for use in a `CmpObserver`, which adds comparisons from a `CmpObserver`
 /// primarily intended for use with `AFLppCmpValuesMetadata` or `CmpValuesMetadata`
@@ -151,10 +152,17 @@ impl CmpValuesMetadata {
         let dn_meta: &TestcaseDirectNeighboursMetadata = tc.metadata_map().get().unwrap();
         let input = tc.input().as_ref().unwrap();
 
+        let full_neighbours_meta = state
+            .metadata::<MapNeighboursFeedbackMetadata>()
+            .unwrap();
+        let covered_blocks = full_neighbours_meta.covered_blocks.clone();
+
         let mut all_replacements: HashSet<TargetedCmpValReplace> = HashSet::new();
 
         for (bb_cov_map_idx, byte_indexes) in &df_meta.bytes_depended_on_by_uncovered_bb {
             if byte_indexes.is_empty() { continue; }
+            // filter out any globally covered edges
+            if covered_blocks.contains(bb_cov_map_idx) { continue; }
             let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) else { continue; };
             let Some(cmpvals) = self.map.get(parent) else { continue; };
             if cmpvals.is_empty() { continue; }

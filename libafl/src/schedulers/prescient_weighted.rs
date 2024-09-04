@@ -152,25 +152,6 @@ where
                 )
             };
 
-            if !last_recalc_corpus_ids.contains(&idx) {
-                let tc = state.corpus().get(idx).unwrap().borrow();
-                let novelties_meta = tc.metadata::<MapNoveltiesMetadata>().unwrap();
-                let novelties = novelties_meta.list.clone();
-                drop(tc);
-
-                let full_neighbours_meta = state
-                    .metadata_mut::<MapNeighboursFeedbackMetadata>()
-                    .unwrap();
-
-                for novelty in novelties {
-                    full_neighbours_meta.reachable_blocks.remove(&novelty);
-                }
-
-                for reachability in &reachabilities {
-                    full_neighbours_meta.reachable_blocks.insert(reachability.index);
-                }
-            }
-
             for reachability in reachabilities {
                 // update reachability frequencies
                 if let Some(freq) = result.frequency_for_reachability.get_mut(&reachability) {
@@ -214,7 +195,6 @@ where
         let full_neighbours_meta = state
             .metadata::<MapNeighboursFeedbackMetadata>()
             .unwrap();
-        let _reachable_all = full_neighbours_meta.reachable_blocks.clone();
         let covered_blocks = full_neighbours_meta.covered_blocks.clone();
 
         let mut total_score = 0.0;

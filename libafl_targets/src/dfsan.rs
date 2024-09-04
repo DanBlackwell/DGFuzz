@@ -294,17 +294,18 @@ where
             labels
         }
 
+        const MAX_DEPENDENT_BYTES: usize = 50;
         let mut bytes_depended_on_by_edge = {
             let mut tmp = HashMap::new();
             for e in required_edges {
-                tmp.insert(*e, Vec::with_capacity(20));
+                tmp.insert(*e, Vec::with_capacity(MAX_DEPENDENT_BYTES));
             }
             tmp
         };
 
         let all_required: HashSet<usize> = required_edges.iter().cloned().collect();
         let mut stack = vec![(all_required, 0..input.bytes().len())];
-        // once there are 20 bytes dependent, stop trying to compute more!
+        // once there are MAX_DEPENDENT_BYTES bytes dependent, stop trying to compute more!
         let mut saturated_conds = HashSet::new();
         // println!("input len: {:?}", input.bytes().len());
 
@@ -349,7 +350,7 @@ where
                         let dependent_bytes = bytes_depended_on_by_edge
                             .get_mut(&edge_idx)
                             .unwrap();
-                        if dependent_bytes.len() >= 20 {
+                        if dependent_bytes.len() >= MAX_DEPENDENT_BYTES {
                             saturated_conds.insert(edge_idx);
                         } else {
                             dependent_bytes.push(linfo.start_pos);
@@ -386,12 +387,6 @@ where
 
         println!("getting dependencies breakdown, exec time: {:?} ({execs} execs {:?} each), filter reqs: {:?}, populate dependent: {:?}",
             exec_time, exec_time / execs, filter_req_time, populate_dependent);
-
-        // Save memory by filtering large dependencies (chances are the targetting won't help much)
-        // bytes_depended_on_by_edge = bytes_depended_on_by_edge
-        //     .into_iter()
-        //     .filter(|(_edge, bytes)| bytes.len() < 20)
-        //     .collect();
 
         Ok(bytes_depended_on_by_edge)
     }
@@ -549,20 +544,11 @@ where
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             let start = std::time::Instant::now();
 
-            let siblings_for_covered_bb: HashMap<usize, Vec<usize>> = {
-                let siblings_for_covered_bb = &mut tc
-                    .metadata_mut::<TestcaseDirectNeighboursMetadata>()
-                    .unwrap()
-                    .siblings_for_covered_bb;
-
-                // clear out any bbs that are now covered
-                siblings_for_covered_bb.retain(|current, siblings| {
-                    siblings.retain(|s| !covered_blocks.contains(s));
-                    !siblings.is_empty()
-                });
-
-                siblings_for_covered_bb.clone()
-            };
+            let siblings_for_covered_bb: HashMap<usize, Vec<usize>> = tc
+                .metadata_mut::<TestcaseDirectNeighboursMetadata>()
+                .unwrap()
+                .locally_uncovered_siblings_for_covered_bb
+                .clone();
             drop(tc);
 
             let required_edges: Vec<usize> = siblings_for_covered_bb.keys().copied().collect();
@@ -623,33 +609,6 @@ where
 
         // self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations)?;
 
-        // Filter out any mappings that we no longer need due to basic blocks being discovered
-        {
-            let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
-
-            let siblings_for_covered_bb = &mut tc
-                .metadata_mut::<TestcaseDirectNeighboursMetadata>()
-                .unwrap()
-                .siblings_for_covered_bb;
-
-            // clear out any bbs that are now covered
-            siblings_for_covered_bb.retain(|current, siblings| {
-                siblings.retain(|s| !covered_blocks.contains(s));
-                !siblings.is_empty()
-            });
-
-            let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
-            for (bytes, cov_map_idxs) in tc_meta.uncovered_bbs_depending_on_bytes.clone() {
-                tc_meta.bytes_depended_on_by_uncovered_bb.retain(|cov_map_idx, _| {
-                    !covered_blocks.contains(cov_map_idx)
-                });
-                tc_meta.uncovered_bbs_depending_on_bytes.retain(|bytes, cov_map_idxs| {
-                    cov_map_idxs.retain(|idx| !covered_blocks.contains(idx));
-                    !cov_map_idxs.is_empty()
-                });
-            }
-        }
-
         let tc_meta_copy = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
@@ -658,7 +617,7 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.metadata::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
-                .siblings_for_covered_bb
+                .locally_uncovered_siblings_for_covered_bb
                 .clone()
         };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
@@ -709,9 +668,8 @@ where
             let mut res = HashMap::new();
             // we haven't fuzzed any of these yet! Fuzz them all the same amount
             if total_muts == 0 {
-                let muts =
-                    f64::ceil(num_mutations as f64 / power_for_mutation_target_bytes.len() as f64)
-                        as usize;
+                let muts = f64::ceil(num_mutations as f64 / 
+                                     power_for_mutation_target_bytes.len() as f64) as usize;
 
                 for (target_bytes, _) in power_for_mutation_target_bytes {
                     res.insert(target_bytes, muts);
