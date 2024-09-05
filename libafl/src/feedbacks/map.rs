@@ -11,7 +11,7 @@ use core::{
 };
 
 // #[rustversion::nightly]
-use libafl_bolts::{dataflow_metadata::TestcaseDirectNeighboursMetadata, AsSlice};
+use libafl_bolts::AsSlice;
 use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef},
     AsIter, HasRefCnt, Named
@@ -288,10 +288,15 @@ impl MapIndexesMetadata {
 /// The Mutation Category that led to a coverage discovery
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Hash, Eq, PartialEq)]
 pub enum DiscoveryMutationType {
+    /// Found while loading the initial seed inputs
     Initialisation,
+    /// Found during CmpLog (untargeted)
     StandardCmpLog,
+    /// Found during targeted CmpLog
     TargetedCmpLog,
+    /// Found during havoc mutations in DFSan guided stage
     DataflowGuidedHavoc,
+    /// Found during havoc mutation
     StandardHavoc
 }
 

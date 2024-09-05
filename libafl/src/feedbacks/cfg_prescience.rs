@@ -499,6 +499,7 @@ impl ControlFlowGraph {
         }
     }
 
+    /// Produce a map from this CFG to the other (based on function start indexes)
     pub fn produce_mapping_to_alt_cfg(&self, alt_cfg: &ControlFlowGraph) -> HashMap<CoverageMapIdx, CoverageMapIdx> {
         let mut mapping = HashMap::new();
         let mut mismatches = HashSet::new();
@@ -886,7 +887,7 @@ impl ControlFlowGraph {
         let mut locally_uncovered_siblings_for_covered_bb = HashMap::new();
         let mut globally_uncovered_siblings_for_covered_bb = HashMap::new();
         let mut parent_for_uncovered_bb = HashMap::new();
-        let locally_covered_set: HashSet<usize> = covered_indexes.clone()
+        let locally_covered_set: HashSet<usize> = covered_indexes
             .into_iter().copied().collect();
 
         for idx in covered_indexes {

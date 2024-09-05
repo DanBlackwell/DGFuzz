@@ -1,14 +1,12 @@
 //! Prescient Weighted sampling scheduler is a corpus scheduler that feeds the fuzzer
 
 use std::vec::Vec;
-use hashbrown::HashSet;
 use alloc::string::String;
 use core::{marker::PhantomData, fmt::Debug};
 
 use hashbrown::HashMap;
 use libafl_bolts::rands::Rand;
 use libafl_bolts::HasLen;
-use libafl_bolts::dataflow_metadata::TestcaseDataflowMetadata;
 use serde::{Deserialize, Serialize};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,7 +16,7 @@ use crate::{
     feedbacks::{cfg_prescience::{ControlFlowGraph, Reachability}, 
     MapIndexesMetadata, 
     MapNeighboursFeedbackMetadata, 
-    MapNoveltiesMetadata}, 
+    }, 
     inputs::UsesInput, 
     schedulers::Scheduler, 
     state::{HasCorpus, HasRand, State, UsesState}, Error
@@ -128,14 +126,13 @@ where
             .unwrap();
 
         let covered_blocks = full_neighbours_meta.covered_blocks.clone();
-        let last_recalc_corpus_ids = full_neighbours_meta.corpus_ids_present_at_recalc.clone();
         full_neighbours_meta.corpus_ids_present_at_recalc = all_ids.clone();
 
         let mut recalcs = 0;
         for &idx in &all_ids {
             recalcs += 1;
 
-            let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+            let tc = state.corpus().get(idx).unwrap().borrow_mut();
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
             let num_mutations = if let Ok(meta) = tc.metadata::<TestcaseMutationsMetadata>() {

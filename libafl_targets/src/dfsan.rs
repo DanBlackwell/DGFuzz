@@ -501,7 +501,7 @@ where
     fn perform(
         &mut self,
         fuzzer: &mut Z,
-        executor: &mut E, // don't need the *main* executor for tracing
+        executor: &mut E,
         state: &mut E::State,
         manager: &mut EM,
     ) -> Result<(), Error> {

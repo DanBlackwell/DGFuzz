@@ -4,7 +4,7 @@ use alloc::{borrow::Cow, vec::Vec};
 use memchr::memmem;
 use core::{
     fmt::Debug,
-    marker::PhantomData, str::Bytes,
+    marker::PhantomData,
 };
 use std::borrow::ToOwned;
 
@@ -13,7 +13,7 @@ use hashbrown::{HashMap, HashSet};
 use libafl_bolts::{dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{corpus::Corpus, executors::ExitKind, inputs::{BytesInput, HasMutatorBytes, UsesInput}, observers::Observer, state::HasCorpus, Error, HasMetadata};
+use crate::{corpus::Corpus, executors::ExitKind, inputs::{HasMutatorBytes, UsesInput}, observers::Observer, state::HasCorpus, Error, HasMetadata};
 use crate::prelude::MapNeighboursFeedbackMetadata;
 
 /// Generic metadata trait for use in a `CmpObserver`, which adds comparisons from a `CmpObserver`
@@ -188,14 +188,11 @@ impl CmpValuesMetadata {
                         }
                     }
                     let mut end = buf1.len();
-                    let mut idx = buf1.len() - 1;
                     loop {
-                        if buf1[idx] != 0 && buf1[idx] != buf2[idx] {
+                        if buf1[end - 1] != 0 || buf1[end - 1] != buf2[end - 1] {
                             break;
                         }
-                        end = idx;
-
-                        if idx == 0 { break; } else { idx -= 1; }
+                        if end == 1 { break; } else { end -= 1; }
                     }
 
                     // println!("stripping {:?} to range {start}..{end}", c);
@@ -213,8 +210,8 @@ impl CmpValuesMetadata {
 
             // populate a complete list of matches for this cmpval in this edges dependent bytes
             for (cmp1, cmp2) in trimmed_cmps {
-                // skip empty replacements
-                if cmp1.is_empty() { continue; }
+                // skip boring replacements
+                if cmp1.len() < 1 { continue; }
 
                 // collect up matches for cmpval side 1
                 memmem::find_iter(&byte_vals, &cmp1)
@@ -225,9 +222,9 @@ impl CmpValuesMetadata {
                         is_little_endian: false
                     })
                     .for_each(|v| { all_replacements.insert(v); });
-                // if it's 1 byte long we'll match it either direction
-                if cmp1.len() > 1 {
-                    let rev = {let mut x = cmp1.clone(); x.reverse(); x};
+                // if it's a palindrome we'll match it either direction
+                let rev: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+                if cmp1 != rev {
                     memmem::find_iter(&byte_vals, &rev)
                         .map(|idx| TargetedCmpValReplace {
                             input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
@@ -247,9 +244,9 @@ impl CmpValuesMetadata {
                         is_little_endian: false
                     })
                     .for_each(|v| { all_replacements.insert(v); });
-                // if it's 1 byte long we'll match it either direction
-                if cmp1.len() > 1 {
-                    let rev = {let mut x = cmp2.clone(); x.reverse(); x};
+                // if it's a palindrome we'll match it either direction
+                let rev: Vec<u8> = cmp2.clone().into_iter().rev().collect();
+                if cmp2 != rev {
                     memmem::find_iter(&byte_vals, &rev)
                         .map(|idx| TargetedCmpValReplace {
                             input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
