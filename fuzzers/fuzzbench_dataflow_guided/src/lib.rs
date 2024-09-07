@@ -23,7 +23,7 @@ use libafl::{
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or,
     feedbacks::{cfg_prescience::ControlFlowGraph, CrashFeedback, MaxMapFeedback, TimeFeedback},
-    fuzzer::{Fuzzer, StdFuzzer},
+    fuzzer::{Fuzzer, StdFuzzer, FuzzerBloomFilterMetadata},
     inputs::{BytesInput, HasTargetBytes},
     monitors::SimpleMonitor,
     mutators::{
@@ -39,7 +39,7 @@ use libafl::{
 };
 use libafl_bolts::{
     current_time,
-    prelude::OwnedMutSlice,
+    prelude::{dup2, OwnedMutSlice},
     rands::StdRand,
     shmem::{ShMem, ShMemMetadata, ShMemProvider, StdShMemProvider},
     tuples::{tuple_list, Merge},
@@ -102,7 +102,7 @@ pub extern "C" fn libafl_main() {
                 .help(
                     "The backoff factor for each neighbour (backoff_factor ^ (num_execs / 1_000))",
                 )
-                .default_value("0.9999"),
+                .default_value("0.99999"),
         )
         .arg(
             Arg::new("dfsan_binary")
@@ -262,8 +262,6 @@ fn fuzz(
         let new_fd = dup(io::stdout().as_raw_fd())?;
         File::from_raw_fd(new_fd)
     };
-    #[cfg(unix)]
-    let _file_null = File::open("/dev/null")?;
 
     // 'While the monitor are state, they are usually used in the broker - which is likely never restarted
     let monitor = SimpleMonitor::with_user_monitor(|s| {
@@ -417,6 +415,12 @@ fn fuzz(
         }
     }
 
+    if state.metadata::<FuzzerBloomFilterMetadata>().is_err() {
+        state.add_metadata(
+            FuzzerBloomFilterMetadata::new_with_items_and_fp_rate(100_000_000, 0.01)
+        );
+    }
+
     if state.metadata_map().get::<ControlFlowGraph>().is_none() {
         if let Some(cfg_file) = cfg_file {
             let mut control_flow_graph = ControlFlowGraph::new();
@@ -468,15 +472,16 @@ fn fuzz(
         println!("We imported {} inputs from disk.", state.corpus().count());
     }
 
-    // // Remove target output (logs still survive)
-    // #[cfg(unix)]
-    // {
-    //     let null_fd = file_null.as_raw_fd();
-    //     dup2(null_fd, io::stdout().as_raw_fd())?;
-    //     if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
-    //         dup2(null_fd, io::stderr().as_raw_fd())?;
-    //     }
-    // }
+    // Remove target output (logs still survive)
+    #[cfg(unix)]
+    {
+        let file_null = File::open("/dev/null")?;
+        let null_fd = file_null.as_raw_fd();
+        // dup2(null_fd, io::stdout().as_raw_fd())?;
+        if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
+            dup2(null_fd, io::stderr().as_raw_fd())?;
+        }
+    }
     // // reopen file to make sure we're at the end
     // log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
 

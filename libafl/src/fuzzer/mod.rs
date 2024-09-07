@@ -1,21 +1,23 @@
 //! The `Fuzzer` is the main struct for a fuzz campaign.
 
 use alloc::string::ToString;
+use bloomfilter::Bloom;
 use core::{fmt::Debug, marker::PhantomData, time::Duration};
+use alloc::vec::Vec;
 
 use libafl_bolts::current_time;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
     corpus::{Corpus, CorpusId, HasCurrentCorpusId, HasTestcase, Testcase},
     events::{Event, EventConfig, EventFirer, EventProcessor, ProgressReporter},
     executors::{Executor, ExitKind, HasObservers},
     feedbacks::Feedback,
-    inputs::UsesInput,
+    inputs::{BytesInput, HasMutatorBytes, Input, UsesInput},
     mark_feature_time,
     observers::ObserversTuple,
     schedulers::Scheduler,
-    stages::{HasCurrentStage, StagesTuple},
+    stages::{mutational::MutatedTransform, HasCurrentStage, StagesTuple},
     start_timer,
     state::{
         HasCorpus, HasCurrentTestcase, HasExecutions, HasImported, HasLastReportTime, HasSolutions,
@@ -28,6 +30,28 @@ use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
 
 /// Send a monitor update all 15 (or more) seconds
 const STATS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(15);
+
+#[derive(Clone,Debug,Serialize,Deserialize)]
+/// Testcase level metadata for DFSan stage
+pub struct FuzzerBloomFilterMetadata {
+    filter: Bloom<Vec<u8>>,
+    dupes: usize,
+}
+
+libafl_bolts::impl_serdeany!(FuzzerBloomFilterMetadata);
+
+impl FuzzerBloomFilterMetadata {
+    pub fn new_with_items_and_fp_rate(item_count: usize, fp_rate: f64) -> Self {
+        Self {
+            filter: Bloom::new_for_fp_rate(item_count, fp_rate),
+            dupes: 0,
+        }
+    }
+
+    pub fn check_and_set(&mut self, item: &[u8]) -> bool {
+        self.filter.check_and_set(&item.to_vec())
+    }
+}
 
 /// Holds a scheduler
 pub trait HasScheduler: UsesState
@@ -534,7 +558,8 @@ where
     OT: ObserversTuple<CS::State> + Serialize + DeserializeOwned,
     F: Feedback<CS::State>,
     OF: Feedback<CS::State>,
-    CS::State: HasCorpus + HasSolutions + HasExecutions + HasImported,
+    CS::State: HasCorpus + HasSolutions + HasExecutions + HasImported + HasMetadata,
+    <Self::State as UsesInput>::Input: HasMutatorBytes,
 {
     /// Process one input, adding to the respective corpora if needed and firing the right events
     #[inline]
@@ -550,6 +575,16 @@ where
         E: Executor<EM, Self> + HasObservers<Observers = OT, State = Self::State>,
         EM: EventFirer<State = Self::State>,
     {
+        if let Ok(bloom_meta) = state.metadata_mut::<FuzzerBloomFilterMetadata>() {
+            if bloom_meta.check_and_set(input.bytes()) {
+                bloom_meta.dupes += 1;
+                if bloom_meta.dupes % 1000 == 1 {
+                    println!("Have {} dupes caught by bloom", bloom_meta.dupes);
+                }
+                return Ok((ExecuteInputResult::None, None));
+            }
+        }
+
         let exit_kind = self.execute_input(state, executor, manager, &input)?;
         let observers = executor.observers();
 
@@ -567,7 +602,8 @@ where
     F: Feedback<CS::State>,
     OF: Feedback<CS::State>,
     OT: ObserversTuple<CS::State> + Serialize + DeserializeOwned,
-    CS::State: HasCorpus + HasSolutions + HasExecutions + HasImported,
+    CS::State: HasCorpus + HasSolutions + HasExecutions + HasImported + HasMetadata,
+    <Self::State as UsesInput>::Input: HasMutatorBytes,
 {
     /// Process one input, adding to the respective corpora if needed and firing the right events
     #[inline]

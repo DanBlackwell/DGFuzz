@@ -57,8 +57,8 @@ pub type HavocMutationsFixedLengthType = tuple_list_type!(
     // DwordInterestingMutator,
     // BytesSetMutator,
     BytesRandSetMutator,
-    // BytesCopyMutator,
-    // BytesSwapMutator,
+    BytesCopyMutator,
+    BytesSwapMutator,
 );
 
 /// Get the mutations that compose the Havoc mutator (only applied to single inputs)
@@ -80,8 +80,8 @@ pub fn havoc_mutations_fixed_length() -> HavocMutationsFixedLengthType {
         // DwordInterestingMutator::new(),
         // BytesSetMutator::new(),
         BytesRandSetMutator::new(),
-        // BytesCopyMutator::new(),
-        // BytesSwapMutator::new(),
+        BytesCopyMutator::new(),
+        BytesSwapMutator::new(),
     )
 }
 

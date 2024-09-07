@@ -19,9 +19,17 @@ use crate::{
     observers::{MapObserver, ObserversTuple},
     schedulers::powersched::SchedulerMetadata,
     stages::{ExecutionCountRestartHelper, Stage},
-    state::{HasCorpus, HasCurrentTestcase, HasExecutions, State, UsesState, HasClientPerfMonitor},
+    state::{
+        HasCorpus, 
+        HasCurrentTestcase, 
+        HasExecutions, 
+        State, 
+        UsesState,
+    },
     Error, HasMetadata, HasNamedMetadata,
 };
+#[cfg(feature = "introspection")]
+use crate::state::HasClientPerfMonitor;
 
 /// The metadata to keep unstable entries
 /// In libafl, the stability is the number of the unstable entries divided by the size of the map

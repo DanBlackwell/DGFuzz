@@ -342,7 +342,7 @@ where
             }
         }
 
-        self.populate_targeted_replacements(state);
+        // self.populate_targeted_replacements(state);
     }
 }
 

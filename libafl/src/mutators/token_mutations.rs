@@ -510,16 +510,16 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        if state.rand_mut().below(2) == 1 {
-            let res = self.targeted_replace(state, input)?;
-            // if there were no exact matches fall back to standard cmplog
-            if res == MutationResult::Mutated { 
-                if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
-                    meta.current_mutation_type = DiscoveryMutationType::TargetedCmpLog;
-                }
-                return Ok(res); 
-            }
-        }
+        // if state.rand_mut().below(2) == 1 {
+        //     let res = self.targeted_replace(state, input)?;
+        //     // if there were no exact matches fall back to standard cmplog
+        //     if res == MutationResult::Mutated { 
+        //         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+        //             meta.current_mutation_type = DiscoveryMutationType::TargetedCmpLog;
+        //         }
+        //         return Ok(res); 
+        //     }
+        // }
 
         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
             meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
