@@ -201,7 +201,7 @@ where
                 let cmplog_meta = tc.metadata_map_mut()
                     .get_or_insert_with::<TestcaseCmpLogMetadata>(|| {
                         TestcaseCmpLogMetadata { 
-                            filter: Bloom::new_for_fp_rate(usable_count, 0.0001) 
+                            filter: Bloom::new_for_fp_rate(usable_count, 0.000001)
                         }
                     });
 

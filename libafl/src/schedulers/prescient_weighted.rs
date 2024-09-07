@@ -45,7 +45,7 @@ pub struct ProbabilityMetadata {
     /// total probability of all items in the map
     pub total_probability: f64,
     /// Do we need to recalculate the scores?
-    pub needs_recalc: bool,
+    pub new_corpus_entry_since_recalc: bool,
     /// The time that we last recalculated all the scores (in millis)
     pub last_recalc_time: u128,
     /// The amount of time the last recalc took
@@ -61,7 +61,7 @@ impl ProbabilityMetadata {
         Self {
             map: HashMap::default(),
             total_probability: 0.0,
-            needs_recalc: false,
+            new_corpus_entry_since_recalc: false,
             last_recalc_time: 0,
             last_recalc_duration: 0,
         }
@@ -316,7 +316,7 @@ where
         }
 
         let prob_meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-        prob_meta.needs_recalc = true;
+        prob_meta.new_corpus_entry_since_recalc = true;
         let avg = prob_meta.total_probability / prob_meta.map.len() as f64;
         prob_meta.map.insert(idx, avg);
         prob_meta.total_probability += avg;
@@ -340,10 +340,10 @@ where
         let rand_prob: f64 = (state.rand_mut().below(MAX_RAND as usize) as f64) / MAX_RAND as f64;
 
         let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-        if meta.needs_recalc {
-            let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-            let time_since_recalc = ts_now - meta.last_recalc_time;
-            let last_duration = meta.last_recalc_duration;
+        let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let time_since_recalc = ts_now - meta.last_recalc_time;
+        let last_duration = meta.last_recalc_duration;
+        if meta.new_corpus_entry_since_recalc || time_since_recalc > 100 * last_duration {
             // Don't spend more than 10% of the fuzzer time recalculating these stats - sure
             // this feels like we're not using the neighbours prescient power much at the start
             // of the campaign, but fuzzing campaigns last hours...
@@ -354,7 +354,7 @@ where
                 self.recalc_all_probabilities(state).unwrap();
 
                 let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-                meta.needs_recalc = false;
+                meta.new_corpus_entry_since_recalc = false;
                 meta.last_recalc_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
                 meta.last_recalc_duration = start.elapsed().as_millis();
             }

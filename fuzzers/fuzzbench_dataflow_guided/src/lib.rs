@@ -417,7 +417,7 @@ fn fuzz(
 
     if state.metadata::<FuzzerBloomFilterMetadata>().is_err() {
         state.add_metadata(
-            FuzzerBloomFilterMetadata::new_with_items_and_fp_rate(100_000_000, 0.01)
+            FuzzerBloomFilterMetadata::new_with_items_and_fp_rate(100_000_000, 0.00001)
         );
     }
 
@@ -546,13 +546,13 @@ fn fuzz(
             128,
         );
 
-        // The order of the stages matter!
-        let mut stages = tuple_list!(calibration, dataflow, tracing, i2s, mutation);
+        // The order of the stages matter! Put mutation first to encourage diversity.
+        let mut stages = tuple_list!(calibration, mutation, dataflow, tracing, i2s);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
     } else {
         // The order of the stages matter!
-        let mut stages = tuple_list!(calibration, tracing, i2s, mutation);
+        let mut stages = tuple_list!(mutation, calibration, tracing, i2s);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
     }
