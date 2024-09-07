@@ -1,5 +1,6 @@
 //! The `CmpObserver` provides access to the logged values of CMP instructions
 
+use bloomfilter::Bloom;
 use alloc::{borrow::Cow, vec::Vec};
 use memchr::memmem;
 use core::{
@@ -38,7 +39,7 @@ where
 }
 
 /// Compare values collected during a run
-#[derive(Eq, PartialEq, Debug, Serialize, Deserialize, Clone)]
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize, Clone, Hash)]
 pub enum CmpValues {
     /// Two u8 values
     U8((u8, u8)),
@@ -75,28 +76,6 @@ impl CmpValues {
     }
 }
 
-
-/// A state metadata holding a list of values logged from comparisons
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
-#[cfg_attr(
-    any(not(feature = "serdeany_autoreg"), miri),
-    allow(clippy::unsafe_derive_deserialize)
-)] // for SerdeAny
-pub struct TargetedCmpValReplace {
-    /// A `list` of indexes to be replaced.
-    #[serde(skip)]
-    pub input_byte_indexes: Vec<usize>,
-    /// A `list` of the current values (to be replaced)
-    #[serde(skip)]
-    pub input_byte_values: Vec<u8>,
-    /// A `list` of the replacement values
-    #[serde(skip)]
-    pub replacement_byte_values: Vec<u8>,
-    /// Did we have to reverse this?
-    #[serde(skip)]
-    pub is_little_endian: bool,
-}
-
 /// A state metadata holding a list of values logged from comparisons
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[cfg_attr(
@@ -110,12 +89,22 @@ pub struct CmpValuesMetadata {
     /// A `HashMap` from prev_edge_idx to list of `CmpValues`
     #[serde(skip)]
     pub map: HashMap<usize, Vec<CmpValues>>,
-    /// A `list` of possible DFSan targeted replacements
-    #[serde(skip)]
-    pub targeted_replacements: Vec<TargetedCmpValReplace>,
 }
 
 libafl_bolts::impl_serdeany!(CmpValuesMetadata);
+
+/// A state metadata holding a list of values logged from comparisons
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(
+    any(not(feature = "serdeany_autoreg"), miri),
+    allow(clippy::unsafe_derive_deserialize)
+)] // for SerdeAny
+pub struct TestcaseCmpLogMetadata {
+    /// A Bloom filter keeping track of tested CmpLogs
+    pub filter: Bloom<CmpValues>
+}
+
+libafl_bolts::impl_serdeany!(TestcaseCmpLogMetadata);
 
 // impl Deref for CmpValuesMetadata {
 //     type Target = [CmpValues];
@@ -134,132 +123,7 @@ impl CmpValuesMetadata {
     /// Creates a new [`struct@CmpValuesMetadata`]
     #[must_use]
     pub fn new() -> Self {
-        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![] }
-    }
-
-    fn populate_targeted_replacements<S>(&mut self, state: &S)
-    where
-        S: HasMetadata + HasCorpus,
-        S::Input: HasMutatorBytes,
-    {
-        if self.list.is_empty() { return; }
-
-        let curr_idx = state.corpus().current().unwrap();
-        let tc = state.corpus().get(curr_idx).unwrap().borrow();
-        let Some(df_meta) = tc.metadata_map().get::<TestcaseDataflowMetadata>() else {
-            return;
-        };
-        let dn_meta: &TestcaseDirectNeighboursMetadata = tc.metadata_map().get().unwrap();
-        let input = tc.input().as_ref().unwrap();
-
-        let full_neighbours_meta = state
-            .metadata::<MapNeighboursFeedbackMetadata>()
-            .unwrap();
-        let covered_blocks = full_neighbours_meta.covered_blocks.clone();
-
-        let mut all_replacements: HashSet<TargetedCmpValReplace> = HashSet::new();
-
-        for (bb_cov_map_idx, byte_indexes) in &df_meta.bytes_depended_on_by_uncovered_bb {
-            if byte_indexes.is_empty() { continue; }
-            // filter out any globally covered edges
-            if covered_blocks.contains(bb_cov_map_idx) { continue; }
-            let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) else { continue; };
-            let Some(cmpvals) = self.map.get(parent) else { continue; };
-            if cmpvals.is_empty() { continue; }
-
-            let trimmed_cmps = cmpvals.into_iter()
-                .map(|c| {
-                    // convert to vecs
-                    let (buf1, buf2) = match c {
-                        // makes no sense to strip u8 or u16s
-                        CmpValues::U8(v) => return (vec![v.0], vec![v.1]),
-                        CmpValues::U16(v) => return (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                        CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                        CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                        CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
-                    };
-
-                    // strip leading and trailing zeroes
-                    let mut start = 0;
-                    for idx in 0..buf1.len() {
-                        start = idx;
-                        if buf1[idx] != 0 || buf1[idx] != buf2[idx] {
-                            break;
-                        }
-                    }
-                    let mut end = buf1.len();
-                    loop {
-                        if buf1[end - 1] != 0 || buf1[end - 1] != buf2[end - 1] {
-                            break;
-                        }
-                        if end == 1 { break; } else { end -= 1; }
-                    }
-
-                    // println!("stripping {:?} to range {start}..{end}", c);
-                    if start < end {
-                        (buf1[start..end].to_vec(), buf2[start..end].to_vec())
-                    } else {
-                        (vec![], vec![])
-                    }
-                });
-
-            let byte_vals: Vec<u8> = {
-                let buf = input.bytes();
-                byte_indexes.iter().map(|&pos| buf[pos]).collect()
-            };
-
-            // populate a complete list of matches for this cmpval in this edges dependent bytes
-            for (cmp1, cmp2) in trimmed_cmps {
-                // skip boring replacements
-                if cmp1.len() < 1 { continue; }
-
-                // collect up matches for cmpval side 1
-                memmem::find_iter(&byte_vals, &cmp1)
-                    .map(|idx| TargetedCmpValReplace {
-                        input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                        replacement_byte_values: cmp2.clone(),
-                        is_little_endian: false
-                    })
-                    .for_each(|v| { all_replacements.insert(v); });
-                // if it's a palindrome we'll match it either direction
-                let rev: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-                if cmp1 != rev {
-                    memmem::find_iter(&byte_vals, &rev)
-                        .map(|idx| TargetedCmpValReplace {
-                            input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                            replacement_byte_values: rev.clone(),
-                            is_little_endian: true
-                        })
-                        .for_each(|v| { all_replacements.insert(v); });
-                }
-
-                // collect up matches for cmpval side 2
-                memmem::find_iter(&byte_vals, &cmp2)
-                    .map(|idx| TargetedCmpValReplace {
-                        input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                        replacement_byte_values: cmp1.clone(),
-                        is_little_endian: false
-                    })
-                    .for_each(|v| { all_replacements.insert(v); });
-                // if it's a palindrome we'll match it either direction
-                let rev: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-                if cmp2 != rev {
-                    memmem::find_iter(&byte_vals, &rev)
-                        .map(|idx| TargetedCmpValReplace {
-                            input_byte_indexes: byte_indexes[idx..(idx + cmp1.len())].to_vec(),
-                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                            replacement_byte_values: rev.clone(),
-                            is_little_endian: true
-                        })
-                        .for_each(|v| { all_replacements.insert(v); });
-                }
-            }
-        }
-
-        self.targeted_replacements = all_replacements.into_iter().collect();
+        Self { list: vec![], map: HashMap::new() }
     }
 }
 
@@ -280,7 +144,6 @@ where
     {
         self.list.clear();
         self.map.clear();
-        self.targeted_replacements.clear();
         let count = usable_count;
         for i in 0..count {
             let execs = cmp_map.usable_executions_for(i);
@@ -333,16 +196,27 @@ where
                     .get_mut(&cov_map_idx)
                     .unwrap();
 
+                let idx = state.corpus().current().unwrap();
+                let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+                let cmplog_meta = tc.metadata_map_mut()
+                    .get_or_insert_with::<TestcaseCmpLogMetadata>(|| {
+                        TestcaseCmpLogMetadata { 
+                            filter: Bloom::new_for_fp_rate(usable_count, 0.0001) 
+                        }
+                    });
+
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
+                        // We've already tested this val...
+                        if cmplog_meta.filter.check(&val) {
+                            continue;
+                        }
                         self.list.push(val.clone());
                         vals.push(val);
                     }
                 }
             }
         }
-
-        // self.populate_targeted_replacements(state);
     }
 }
 

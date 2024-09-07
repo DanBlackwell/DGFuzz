@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
 use crate::mutators::str_decode;
 use crate::{
-    corpus::{CorpusId, HasCurrentCorpusId}, inputs::{HasMutatorBytes, UsesInput}, mutators::{
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId}, inputs::{HasMutatorBytes, UsesInput}, mutators::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
-    }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata}, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
+    }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata, TestcaseCmpLogMetadata}, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
 };
 use crate::prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata};
 
@@ -420,84 +420,6 @@ impl TokenReplace {
 #[derive(Debug, Default)]
 pub struct I2SRandReplace;
 
-impl I2SRandReplace
-{
-    fn targeted_replace<I, S>(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> 
-    where
-        S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
-        I: HasMutatorBytes,
-    {
-        let replacements_len = {
-            let Some(cmp_meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
-                return Ok(MutationResult::Skipped);
-            };
-            if cmp_meta.targeted_replacements.is_empty() {
-                return Ok(MutationResult::Skipped);
-            }
-            cmp_meta.targeted_replacements.len()
-        };
-
-        let chosen_rep = state.rand_mut().below(replacements_len);
-        let replacement = {
-            let cmp_meta = state.metadata_map_mut().get_mut::<CmpValuesMetadata>().unwrap();
-            cmp_meta.targeted_replacements.remove(chosen_rep)
-        };
-
-        let mut swap_vec = replacement.replacement_byte_values.to_owned();
-        if swap_vec.len() <= 8 {
-            let rand = state.rand_mut().below(4);
-
-            // 50% chance to copy exact (handles ==, <= and >=), 
-            // 25% chance to +1 or -1 (to deal with !=, > or < comparisons)
-            if rand > 1 {
-                let mut num_val = if replacement.is_little_endian {
-                    // assume unsigned (sorry)
-                    let mut tmp = swap_vec.clone();
-                    while tmp.len() < 8 { tmp.push(0); }
-                    u64::from_le_bytes(tmp.try_into().unwrap())
-                } else {
-                    let mut tmp = swap_vec.clone();
-                    while tmp.len() < 8 { tmp.insert(0, 0); }
-                    u64::from_be_bytes(tmp.try_into().unwrap())
-                };
-
-                if rand == 2 {
-                    num_val += 1;
-                } else {
-                    num_val -= 1;
-                }
-
-                // let og = swap_vec.clone();
-
-                swap_vec = if replacement.is_little_endian {
-                    num_val.to_le_bytes()[0..swap_vec.len()].to_vec()
-                } else {
-                    num_val.to_be_bytes()[(8 - swap_vec.len())..].to_vec()
-                };
-
-                // println!("{} {num_val} turning {:?} into {:?}", 
-                //     if rand == 2 { "added 1 to" } else { "subtracted 1 from" },
-                //     og, swap_vec
-                // );
-            }
-        }
-
-        // if swap_vec.len() > 2 {
-        //     println!("Swapping in {:?} in place of {:?} at positions {:?}", 
-        //         swap_vec, replacement.input_byte_values, 
-        //         replacement.input_byte_indexes);
-        // }
-
-        // populate the input with the cmpval bytes
-        let bytes = input.bytes_mut();
-        for (cmp_idx, input_idx) in replacement.input_byte_indexes.into_iter().enumerate() {
-            bytes[input_idx] = swap_vec[cmp_idx];
-        }
-        
-        Ok(MutationResult::Mutated)
-    }
-}
-
 impl<I, S> Mutator<I, S> for I2SRandReplace
 where
     S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
@@ -509,17 +431,6 @@ where
         if size == 0 {
             return Ok(MutationResult::Skipped);
         }
-
-        // if state.rand_mut().below(2) == 1 {
-        //     let res = self.targeted_replace(state, input)?;
-        //     // if there were no exact matches fall back to standard cmplog
-        //     if res == MutationResult::Mutated { 
-        //         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
-        //             meta.current_mutation_type = DiscoveryMutationType::TargetedCmpLog;
-        //         }
-        //         return Ok(res); 
-        //     }
-        // }
 
         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
             meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
@@ -541,8 +452,15 @@ where
         let len = input.bytes().len();
         let bytes = input.bytes_mut();
 
-        let meta = state.metadata::<CmpValuesMetadata>().unwrap();
-        let cmp_values = &meta.list[idx];
+        let meta = state.metadata_mut::<CmpValuesMetadata>().unwrap();
+        // no point testing this one again, so remove it...
+        let cmp_values = &meta.list.swap_remove(idx);
+
+        let idx = state.corpus().current().unwrap();
+        let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
+        let cmplog_meta = tc.metadata_map_mut().get_mut::<TestcaseCmpLogMetadata>().unwrap();
+        // mark this CmpValues as tested for this Testcase
+        cmplog_meta.filter.set(&cmp_values);
 
         let mut result = MutationResult::Skipped;
         match cmp_values {

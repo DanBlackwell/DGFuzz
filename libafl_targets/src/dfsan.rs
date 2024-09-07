@@ -52,13 +52,14 @@ pub type HavocMutationsFixedLengthType = tuple_list_type!(
     WordAddMutator,
     DwordAddMutator,
     QwordAddMutator,
+    // Interesting values are less interesting when you have CmpLog!
     // ByteInterestingMutator,
     // WordInterestingMutator,
     // DwordInterestingMutator,
-    // BytesSetMutator,
+    BytesSetMutator,
     BytesRandSetMutator,
     BytesCopyMutator,
-    BytesSwapMutator,
+    // BytesSwapMutator,
 );
 
 /// Get the mutations that compose the Havoc mutator (only applied to single inputs)
@@ -78,10 +79,10 @@ pub fn havoc_mutations_fixed_length() -> HavocMutationsFixedLengthType {
         // ByteInterestingMutator::new(),
         // WordInterestingMutator::new(),
         // DwordInterestingMutator::new(),
-        // BytesSetMutator::new(),
+        BytesSetMutator::new(),
         BytesRandSetMutator::new(),
         BytesCopyMutator::new(),
-        BytesSwapMutator::new(),
+        // BytesSwapMutator::new(),
     )
 }
 
