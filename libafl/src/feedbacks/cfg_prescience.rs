@@ -8,12 +8,12 @@ use serde::{Deserialize, Serialize};
 
 /// A wrapper for u32 indicating the Coverage map index for a basic block / instruction
 #[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
-pub struct CoverageMapIdx(u32);
+pub struct CoverageMapIdx(pub u32);
 libafl_bolts::impl_serdeany!(CoverageMapIdx);
 
 /// A wrapper for u64 indicating the uuid for a basic block
 #[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
-pub struct BasicBlockUUID(u32);
+pub struct BasicBlockUUID(pub u32);
 libafl_bolts::impl_serdeany!(BasicBlockUUID);
 
 
@@ -80,7 +80,9 @@ pub struct ControlFlowGraph {
     /// definition is used)
     functions_needing_recalc: HashSet<String>,
     /// List of functions that either only have one definition, or we have seen in the coverage
-    confirmed_functions: HashSet<String>
+    confirmed_functions: HashSet<String>,
+    /// Mapping from `CoverageMapIdx` in this CFG, to the alternate CFG (loaded through `produce_mapping_to_alt_cfg`)
+    corresponding_edge_index_in_alt_cfg: Option<HashMap<CoverageMapIdx, CoverageMapIdx>>,
 }
 
 libafl_bolts::impl_serdeany!(ControlFlowGraph);
@@ -96,6 +98,7 @@ impl ControlFlowGraph {
             duplicate_cov_map_idxs: HashSet::new(),
             functions_needing_recalc: HashSet::new(),
             confirmed_functions: HashSet::new(),
+            corresponding_edge_index_in_alt_cfg: None,
         }
     }
     
@@ -500,7 +503,7 @@ impl ControlFlowGraph {
     }
 
     /// Produce a map from this CFG to the other (based on function start indexes)
-    pub fn produce_mapping_to_alt_cfg(&self, alt_cfg: &ControlFlowGraph) -> HashMap<CoverageMapIdx, CoverageMapIdx> {
+    pub fn produce_mapping_to_alt_cfg(&mut self, alt_cfg: &ControlFlowGraph) -> HashMap<CoverageMapIdx, CoverageMapIdx> {
         let mut mapping = HashMap::new();
         let mut mismatches = HashSet::new();
 
@@ -534,7 +537,20 @@ impl ControlFlowGraph {
 
         println!("Mismatches between this CFG and alt {}: {:?}", mismatches.len(), mismatches);
 
+        self.corresponding_edge_index_in_alt_cfg = Some(mapping.clone());
+
         mapping
+    }
+
+    /// Get the corresponding `CoverageMapIdx` from the alt CFG (if loaded)
+    pub fn get_corresponding_edge_index_in_alt_cfg(&self, edge_index: CoverageMapIdx) -> Option<CoverageMapIdx> {
+        if let Some(map) = &self.corresponding_edge_index_in_alt_cfg {
+            if let Some(alt_edge) = map.get(&edge_index) {
+                return Some(*alt_edge);
+            }
+        }
+
+        None
     }
 
     /// return a Vec of the coverage map indexes that can be directly reached from a function call

@@ -20,32 +20,18 @@ use libafl_bolts::{
 };
 
 use libafl::{
-    common::HasMetadata,
-    corpus::{Corpus, CorpusId},
-    events::{EventFirer, EventRestarter},
-    executors::{Executor, HasObservers, ForkserverExecutor},
-    feedbacks::{
+    common::HasMetadata, corpus::{Corpus, CorpusId}, events::{EventFirer, EventRestarter}, executors::{Executor, ForkserverExecutor, HasObservers}, feedbacks::{
         cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata,
-    },
-    inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput},
-    mark_feature_time,
-    mutators::{
+    }, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{
         BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
         ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator,
         BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator,
         DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator,
         WordAddMutator, WordInterestingMutator,
-    },
-    observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver},
-    stages::{
+    }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{cfg_prescience::CoverageMapIdx, DiscoveriesMutationTypeMetadata, DiscoveryMutationType}, stages::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
-    },
-    state::{HasExecutions, HasSolutions},
-    start_timer,
-    state::{HasCorpus, HasRand, UsesState},
-    Error, Evaluator, ExecuteInputResult, HasObjective,
-    prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata}
+    }, start_timer, state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState}, Error, Evaluator, ExecuteInputResult, HasObjective
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -303,7 +289,29 @@ where
             tmp
         };
 
-        let all_required: HashSet<usize> = required_edges.iter().cloned().collect();
+        let this_cfg_to_dfsan_edge_mapping = {
+            let mut res = HashMap::new();
+            let cfg_meta = state.metadata::<ControlFlowGraph>().unwrap();
+            for edge in required_edges {
+                let cov = CoverageMapIdx(*edge as u32);
+                if let Some(alt_edge) = cfg_meta.get_corresponding_edge_index_in_alt_cfg(cov) {
+                    res.insert(*edge, alt_edge.0 as usize);
+                } else {
+                    res.insert(*edge, *edge);
+                }
+            }
+            res
+        };
+
+        let dfsan_to_this_cfg_edge_mapping = {
+            let mut res = HashMap::new();
+            for (this_edge, alt_edge) in &this_cfg_to_dfsan_edge_mapping {
+                res.insert(*alt_edge, *this_edge);
+            }
+            res
+        };
+
+        let all_required: HashSet<usize> = this_cfg_to_dfsan_edge_mapping.values().copied().collect();
         let mut stack = vec![(all_required, 0..input.bytes().len())];
         // once there are MAX_DEPENDENT_BYTES bytes dependent, stop trying to compute more!
         let mut saturated_conds = HashSet::new();
@@ -347,8 +355,9 @@ where
                 let linfo = label_infos[(label as usize) - 1];
                 if linfo.len == 1 {
                     for edge_idx in edges {
+                        let mapped_edge_idx = dfsan_to_this_cfg_edge_mapping[&edge_idx];
                         let dependent_bytes = bytes_depended_on_by_edge
-                            .get_mut(&edge_idx)
+                            .get_mut(&mapped_edge_idx)
                             .unwrap();
                         if dependent_bytes.len() >= MAX_DEPENDENT_BYTES {
                             saturated_conds.insert(edge_idx);
@@ -712,13 +721,13 @@ where
             res
         };
 
-        let mut mutator =
-            StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
-
         let original_input = {
             let tc = state.corpus().get(idx).unwrap().borrow();
             tc.input().as_ref().unwrap().clone()
         };
+
+        let mut mutator =
+            StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
 
         // iterate through all of the edges with uncovered neighbours and test out
         // num_mutations different mutants
@@ -750,7 +759,19 @@ where
 
                     if mutated == MutationResult::Skipped {
                         continue;
-                    }
+
+                    // Select from uniform
+                    // let mut idx = 0;
+                    // while idx < input.bytes().len() {
+                    //     let rand_bytes = state.rand_mut().next().to_ne_bytes();
+                    //     for rand_byte in rand_bytes {
+                    //         if idx >= input.bytes().len() {
+                    //             break;
+                    //         }
+                    //         input.bytes_mut()[idx] = rand_byte;
+                    //         idx += 1;
+                    //     }
+                    // }
 
                     input.bytes()
                 } else {
@@ -798,10 +819,8 @@ where
 
                 // Time is measured directly the `evaluate_input` function
                 let (untransformed, post) = input.try_transform_into(state).unwrap();
-                start_timer!(state);
                 let (result, corpus_idx) =
                     fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
-                mark_feature_time!(state, PerfFeature::TargetExecution);
 
                 if result == ExecuteInputResult::Corpus {
                     let post_covered = state
