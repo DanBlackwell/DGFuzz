@@ -52,13 +52,13 @@ pub type HavocMutationsFixedLengthType = tuple_list_type!(
     WordAddMutator,
     DwordAddMutator,
     QwordAddMutator,
-    ByteInterestingMutator,
-    WordInterestingMutator,
-    DwordInterestingMutator,
-    BytesSetMutator,
+    // ByteInterestingMutator,
+    // WordInterestingMutator,
+    // DwordInterestingMutator,
+    // BytesSetMutator,
     BytesRandSetMutator,
-    BytesCopyMutator,
-    BytesSwapMutator,
+    // BytesCopyMutator,
+    // BytesSwapMutator,
 );
 
 /// Get the mutations that compose the Havoc mutator (only applied to single inputs)
@@ -75,13 +75,13 @@ pub fn havoc_mutations_fixed_length() -> HavocMutationsFixedLengthType {
         WordAddMutator::new(),
         DwordAddMutator::new(),
         QwordAddMutator::new(),
-        ByteInterestingMutator::new(),
-        WordInterestingMutator::new(),
-        DwordInterestingMutator::new(),
-        BytesSetMutator::new(),
+        // ByteInterestingMutator::new(),
+        // WordInterestingMutator::new(),
+        // DwordInterestingMutator::new(),
+        // BytesSetMutator::new(),
         BytesRandSetMutator::new(),
-        BytesCopyMutator::new(),
-        BytesSwapMutator::new(),
+        // BytesCopyMutator::new(),
+        // BytesSwapMutator::new(),
     )
 }
 
@@ -759,6 +759,7 @@ where
 
                     if mutated == MutationResult::Skipped {
                         continue;
+                    }
 
                     // Select from uniform
                     // let mut idx = 0;
