@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use super::MutationId;
 use crate::{
     corpus::{Corpus, CorpusId},
+    feedbacks::map::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata},
+    inputs::HasMutatorBytes,
     mutators::{
         mutations::{
             BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
@@ -26,10 +28,11 @@ use crate::{
             CrossoverInsertMutator, CrossoverReplaceMutator, DwordAddMutator,
             DwordInterestingMutator, QwordAddMutator, WordAddMutator, WordInterestingMutator,
         },
-        token_mutations::{TokenInsert, TokenReplace},
+        token_mutations::{TokenInsert, TokenReplace, I2SRandReplace},
         MutationResult, Mutator, MutatorsTuple,
     },
-    state::{HasCorpus, HasRand},
+    observers::cmp::TestcaseCmpLogMetadata,
+    state::{HasCorpus, HasRand, HasMaxSize, UsesState},
     Error, HasMetadata,
 };
 
@@ -215,6 +218,141 @@ where
                 mutations.names().join(", ")
             )),
             mutations,
+            max_stack_pow,
+            phantom: PhantomData,
+        }
+    }
+}
+
+/// A [`Mutator`] that schedules one of the embedded mutations on each call.
+pub struct CmpLogScheduledMutator<I, S>
+where
+    S: HasRand,
+    I: HasMutatorBytes,
+{
+    name: Cow<'static, str>,
+    rand_replace_mutator: tuple_list_type!(I2SRandReplace),
+    test_singles: bool,
+    max_stack_pow: usize,
+    phantom: PhantomData<(I, S)>,
+}
+
+impl<I, S> Debug for CmpLogScheduledMutator<I, S>
+where
+    S: HasRand,
+    I: HasMutatorBytes,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "CmpLogScheduledMutator for Input type {}",
+            core::any::type_name::<I>()
+        )
+    }
+}
+
+impl<I, S> Named for CmpLogScheduledMutator<I, S>
+where
+    S: HasRand,
+    I: HasMutatorBytes,
+{
+    fn name(&self) -> &Cow<'static, str> {
+        &self.name
+    }
+}
+
+impl<I, S> Mutator<I, S> for CmpLogScheduledMutator<I, S>
+where
+    S: HasRand + HasCorpus + HasMetadata + HasMaxSize,
+    I: HasMutatorBytes,
+{
+    #[inline]
+    fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
+        {
+            let corpus_idx = state.corpus().current().unwrap();
+            let mut tc = state.corpus().get(corpus_idx).unwrap().borrow_mut();
+            let cmplog_meta = tc.metadata_map_mut().get_mut::<TestcaseCmpLogMetadata>().unwrap();
+            if !cmplog_meta.all_individuals_tested {
+                self.rand_replace_mutator.0.exhaustive_test_individuals = true;
+                self.test_singles = true;
+            } else {
+                self.rand_replace_mutator.0.exhaustive_test_individuals = false;
+                self.test_singles = false;
+            }
+        }
+
+        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+            meta.current_mutation_type = if self.test_singles {
+                DiscoveryMutationType::ExhaustiveCmpLog
+            } else {
+                DiscoveryMutationType::HavocCmpLog
+            };
+        }
+
+        self.scheduled_mutate(state, input)
+    }
+}
+
+impl<I, S> ComposedByMutations<I, tuple_list_type!(I2SRandReplace), S> for CmpLogScheduledMutator<I, S>
+where
+    S: HasRand + HasCorpus + HasMaxSize + HasMetadata,
+    I: HasMutatorBytes,
+{
+    /// Get the mutations
+    #[inline]
+    fn mutations(&self) -> &(I2SRandReplace,()) {
+        &self.rand_replace_mutator
+    }
+
+    // Get the mutations (mutable)
+    #[inline]
+    fn mutations_mut(&mut self) -> &mut (I2SRandReplace,()) {
+        &mut self.rand_replace_mutator
+    }
+}
+
+impl<I, S> ScheduledMutator<I, tuple_list_type!(I2SRandReplace), S> for CmpLogScheduledMutator<I, S>
+where
+    S: HasRand + HasMetadata + HasCorpus + HasMaxSize,
+    I: HasMutatorBytes,
+{
+    /// Compute the number of iterations used to apply stacked mutations
+    fn iterations(&self, state: &mut S, _: &I) -> u64 {
+        if self.test_singles { 
+            1 
+        } else {
+            1 << (1 + state.rand_mut().below(self.max_stack_pow))
+        }
+    }
+
+    /// Get the next mutation to apply
+    fn schedule(&self, state: &mut S, _: &I) -> MutationId {
+        MutationId::from(0)
+    }
+}
+
+impl<I, S> CmpLogScheduledMutator<I, S>
+where
+    S: HasRand,
+    I: HasMutatorBytes,
+{
+    /// Create a new [`StdScheduledMutator`] instance specifying mutations
+    pub fn new() -> Self {
+        CmpLogScheduledMutator {
+            name: Cow::from(format!("CmpLogScheduledMutator")),
+            rand_replace_mutator: tuple_list!(I2SRandReplace::exhaustive_singles()),
+            test_singles: true,
+            max_stack_pow: 7,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Create a new [`StdScheduledMutator`] instance specifying mutations and the maximun number of iterations
+    pub fn with_max_stack_pow(max_stack_pow: usize) -> Self {
+        CmpLogScheduledMutator {
+            name: Cow::from(format!("CmpLogScheduledMutator[]")),
+            rand_replace_mutator: tuple_list!(I2SRandReplace::exhaustive_singles()),
+            test_singles: true,
             max_stack_pow,
             phantom: PhantomData,
         }

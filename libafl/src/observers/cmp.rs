@@ -100,8 +100,10 @@ libafl_bolts::impl_serdeany!(CmpValuesMetadata);
     allow(clippy::unsafe_derive_deserialize)
 )] // for SerdeAny
 pub struct TestcaseCmpLogMetadata {
-    /// A Bloom filter keeping track of tested CmpLogs
-    pub filter: Bloom<CmpValues>
+    /// A Bloom filter keeping track of tested CmpValues and their start index
+    pub filter: Option<Bloom<(CmpValues, usize)>>,
+    /// bool to indicate that all individual CmpValues have been tested
+    pub all_individuals_tested: bool,
 }
 
 libafl_bolts::impl_serdeany!(TestcaseCmpLogMetadata);
@@ -201,16 +203,13 @@ where
                 let cmplog_meta = tc.metadata_map_mut()
                     .get_or_insert_with::<TestcaseCmpLogMetadata>(|| {
                         TestcaseCmpLogMetadata { 
-                            filter: Bloom::new_for_fp_rate(usable_count, 0.000001)
+                            filter: Some(Bloom::new_for_fp_rate(10 * usable_count, 0.000001)),
+                            all_individuals_tested: false,
                         }
                     });
 
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
-                        // We've already tested this val...
-                        if cmplog_meta.filter.check(&val) {
-                            continue;
-                        }
                         self.list.push(val.clone());
                         vals.push(val);
                     }

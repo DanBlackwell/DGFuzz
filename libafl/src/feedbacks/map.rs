@@ -290,8 +290,10 @@ impl MapIndexesMetadata {
 pub enum DiscoveryMutationType {
     /// Found while loading the initial seed inputs
     Initialisation,
-    /// Found during CmpLog (untargeted)
-    StandardCmpLog,
+    /// Found during Singles CmpLog (untargeted)
+    ExhaustiveCmpLog,
+    /// Found during havoc CmpLog (untargeted)
+    HavocCmpLog,
     /// Found during targeted CmpLog
     TargetedCmpLog,
     /// Found during havoc mutations in DFSan guided stage

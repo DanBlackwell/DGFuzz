@@ -28,7 +28,7 @@ use libafl::{
     monitors::SimpleMonitor,
     mutators::{
         scheduled::havoc_mutations, token_mutations::I2SRandReplace, tokens_mutations,
-        StdScheduledMutator, Tokens,
+        StdScheduledMutator, CmpLogScheduledMutator, Tokens,
     },
     observers::{CanTrack, HitcountsMapObserver, TimeObserver},
     prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata},
@@ -42,7 +42,7 @@ use libafl_bolts::{
     prelude::{dup2, OwnedMutSlice},
     rands::StdRand,
     shmem::{ShMem, ShMemMetadata, ShMemProvider, StdShMemProvider},
-    tuples::{tuple_list, Merge},
+    tuples::{tuple_list, Merge, Append},
     AsSlice,
 };
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
@@ -102,7 +102,7 @@ pub extern "C" fn libafl_main() {
                 .help(
                     "The backoff factor for each neighbour (backoff_factor ^ (num_execs / 1_000))",
                 )
-                .default_value("0.99999"),
+                .default_value("0.9999"),
         )
         .arg(
             Arg::new("dfsan_binary")
@@ -345,8 +345,7 @@ fn fuzz(
         println!("Warning: LLVMFuzzerInitialize failed with -1");
     }
 
-    // Setup a randomic Input2State stage
-    let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
+    let i2s = StdMutationalStage::new(CmpLogScheduledMutator::new());
 
     // Setup a MOPT mutator
     // let mutator = StdMOptMutator::new(
@@ -355,8 +354,10 @@ fn fuzz(
     //     7,
     //     5,
     // )?;
-    let mutator =
-        StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+    let mutator = StdScheduledMutator::with_max_stack_pow(
+        havoc_mutations().merge(tokens_mutations()).append(I2SRandReplace::havoc()), 
+        6
+    );
 
     let mutation = StdMutationalStage::with_max_iterations(mutator, 128);
 
@@ -546,13 +547,13 @@ fn fuzz(
             128,
         );
 
-        // The order of the stages matter! Put mutation first to encourage diversity.
-        let mut stages = tuple_list!(calibration, mutation, dataflow, tracing, i2s);
+        // The order of the stages matter!
+        let mut stages = tuple_list!(calibration, tracing, i2s, dataflow, mutation);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
     } else {
         // The order of the stages matter!
-        let mut stages = tuple_list!(mutation, calibration, tracing, i2s);
+        let mut stages = tuple_list!(mutation, tracing, calibration, i2s);
 
         fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
     }

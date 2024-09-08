@@ -27,8 +27,8 @@ use libafl::{
         ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator,
         BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator,
         DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator,
-        WordAddMutator, WordInterestingMutator,
-    }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{cfg_prescience::CoverageMapIdx, DiscoveriesMutationTypeMetadata, DiscoveryMutationType}, stages::{
+        WordAddMutator, WordInterestingMutator, I2SRandReplace,
+    }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{cfg_prescience::CoverageMapIdx, DiscoveriesMutationTypeMetadata, HasMaxSize, DiscoveryMutationType}, stages::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
     }, start_timer, state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState}, Error, Evaluator, ExecuteInputResult, HasObjective
@@ -59,6 +59,7 @@ pub type HavocMutationsFixedLengthType = tuple_list_type!(
     BytesSetMutator,
     BytesRandSetMutator,
     BytesCopyMutator,
+    I2SRandReplace,
     // BytesSwapMutator,
 );
 
@@ -82,6 +83,7 @@ pub fn havoc_mutations_fixed_length() -> HavocMutationsFixedLengthType {
         BytesSetMutator::new(),
         BytesRandSetMutator::new(),
         BytesCopyMutator::new(),
+        I2SRandReplace::havoc(),
         // BytesSwapMutator::new(),
     )
 }
@@ -412,7 +414,7 @@ where
     where
         EM: UsesState<State = E::State> + EventFirer + EventRestarter,
         E: HasObservers + Executor<EM, Z>,
-        E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
+        E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions + HasMaxSize,
         E::Input: HasMutatorBytes + HasTargetBytes,
         Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
     {
@@ -502,7 +504,7 @@ impl<'a, E, EM, Z> Stage<E, EM, Z> for DataflowStage<'a, EM, E, Z>
 where
     EM: UsesState<State = E::State> + EventFirer + EventRestarter,
     E: HasObservers + Executor<EM, Z>,
-    E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
+    E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions + HasMaxSize,
     E::Input: HasMutatorBytes + HasTargetBytes,
     Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
 {

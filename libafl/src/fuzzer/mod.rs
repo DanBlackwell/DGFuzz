@@ -575,15 +575,15 @@ where
         E: Executor<EM, Self> + HasObservers<Observers = OT, State = Self::State>,
         EM: EventFirer<State = Self::State>,
     {
-        if let Ok(bloom_meta) = state.metadata_mut::<FuzzerBloomFilterMetadata>() {
-            if bloom_meta.check_and_set(input.bytes()) {
-                bloom_meta.dupes += 1;
-                if bloom_meta.dupes % 1000 == 1 {
-                    println!("Have {} dupes caught by bloom", bloom_meta.dupes);
-                }
-                return Ok((ExecuteInputResult::None, None));
-            }
-        }
+        // if let Ok(bloom_meta) = state.metadata_mut::<FuzzerBloomFilterMetadata>() {
+        //     if bloom_meta.check_and_set(input.bytes()) {
+        //         bloom_meta.dupes += 1;
+        //         if bloom_meta.dupes % 1000 == 1 {
+        //             println!("Have {} dupes caught by bloom", bloom_meta.dupes);
+        //         }
+        //         return Ok((ExecuteInputResult::None, None));
+        //     }
+        // }
 
         let exit_kind = self.execute_input(state, executor, manager, &input)?;
         let observers = executor.observers();

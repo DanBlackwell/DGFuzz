@@ -418,7 +418,9 @@ impl TokenReplace {
 /// A `I2SRandReplace` [`Mutator`] replaces a random matching input-2-state comparison operand with the other.
 /// It needs a valid [`CmpValuesMetadata`] in the state.
 #[derive(Debug, Default)]
-pub struct I2SRandReplace;
+pub struct I2SRandReplace {
+    pub(crate) exhaustive_test_individuals: bool
+}
 
 impl<I, S> Mutator<I, S> for I2SRandReplace
 where
@@ -432,9 +434,263 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
-            meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
+        if self.exhaustive_test_individuals {
+            self.mutate_exhaustive(state, input)
+        } else {
+            self.mutate_any(state, input)
         }
+    }
+}
+
+impl Named for I2SRandReplace {
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("I2SRandReplace");
+        &NAME
+    }
+}
+
+impl I2SRandReplace {
+    /// Creates a new `I2SRandReplace` struct.
+    #[must_use]
+    pub fn exhaustive_singles() -> Self {
+        Self { exhaustive_test_individuals: true }
+    }
+
+    pub fn havoc() -> Self {
+        Self { exhaustive_test_individuals: false }
+    }
+
+    fn mutate_exhaustive<I, S>(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error>
+    where
+        S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
+        I: HasMutatorBytes,
+    {
+        let size = input.bytes().len();
+
+        // keep going until we either find a valid replacement or the list is empty
+        loop {
+            let cmps_len = {
+                let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
+                    return Ok(MutationResult::Skipped);
+                };
+                log::trace!("meta: {:x?}", meta);
+                if meta.list.is_empty() {
+                    return Ok(MutationResult::Skipped);
+                }
+                meta.list.len()
+            };
+            let cmpval_idx = state.rand_mut().below(cmps_len);
+
+            let off = state.rand_mut().below(size);
+            let len = input.bytes().len();
+            let bytes = input.bytes_mut();
+
+            let cmp_values = {
+                let meta = state.metadata_mut::<CmpValuesMetadata>().unwrap();
+                meta.list[cmpval_idx].clone()
+            };
+            let mut start_idx = off;
+
+            let corpus_idx = state.corpus().current().unwrap();
+            let mut tc = state.corpus().get(corpus_idx).unwrap().borrow_mut();
+            let cmplog_meta = tc.metadata_map_mut().get_mut::<TestcaseCmpLogMetadata>().unwrap();
+            if cmplog_meta.all_individuals_tested {
+                return Ok(MutationResult::Skipped);
+            }
+
+            let mut result = MutationResult::Skipped;
+            match &cmp_values {
+                CmpValues::U8(v) => {
+                    for byte in bytes.iter_mut().take(len).skip(off) {
+                        if *byte == v.0 {
+                            if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                *byte = v.1;
+                                result = MutationResult::Mutated;
+                                break;
+                            }
+                        } else if *byte == v.1 {
+                            if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                *byte = v.0;
+                                result = MutationResult::Mutated;
+                                break;
+                            }
+                        }
+                        start_idx += 1;
+                    }
+                }
+                CmpValues::U16(v) => {
+                    if len >= size_of::<u16>() {
+                        for i in off..len - (size_of::<u16>() - 1) {
+                            let val =
+                                u16::from_ne_bytes(bytes[i..i + size_of::<u16>()].try_into().unwrap());
+                            if val == v.0 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.1.to_ne_bytes();
+                                    bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val.swap_bytes() == v.0 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.1.swap_bytes().to_ne_bytes();
+                                    bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val == v.1 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.0.to_ne_bytes();
+                                    bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val.swap_bytes() == v.1 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.0.swap_bytes().to_ne_bytes();
+                                    bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            }
+                            start_idx += 1;
+                        }
+                    }
+                }
+                CmpValues::U32(v) => {
+                    if len >= size_of::<u32>() {
+                        for i in off..len - (size_of::<u32>() - 1) {
+                            let val =
+                                u32::from_ne_bytes(bytes[i..i + size_of::<u32>()].try_into().unwrap());
+                            if val == v.0 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.1.to_ne_bytes();
+                                    bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val.swap_bytes() == v.0 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.1.swap_bytes().to_ne_bytes();
+                                    bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val == v.1 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.0.to_ne_bytes();
+                                    bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val.swap_bytes() == v.1 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.0.swap_bytes().to_ne_bytes();
+                                    bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            }
+                            start_idx += 1;
+                        }
+                    }
+                }
+                CmpValues::U64(v) => {
+                    if len >= size_of::<u64>() {
+                        for i in off..len - (size_of::<u64>() - 1) {
+                            let val =
+                                u64::from_ne_bytes(bytes[i..i + size_of::<u64>()].try_into().unwrap());
+                            if val == v.0 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.1.to_ne_bytes();
+                                    bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val.swap_bytes() == v.0 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.1.swap_bytes().to_ne_bytes();
+                                    bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val == v.1 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.0.to_ne_bytes();
+                                    bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            } else if val.swap_bytes() == v.1 {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    let new_bytes = v.0.swap_bytes().to_ne_bytes();
+                                    bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
+                                    result = MutationResult::Mutated;
+                                    break;
+                                }
+                            }
+                            start_idx += 1;
+                        }
+                    }
+                }
+                CmpValues::Bytes(v) => {
+                    'outer: for i in off..len {
+                        let mut size = core::cmp::min(v.0.len(), len - i);
+                        while size != 0 {
+                            if v.0[0..size] == input.bytes()[i..i + size] {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    unsafe {
+                                        buffer_copy(input.bytes_mut(), &v.1, 0, i, size);
+                                    }
+                                    result = MutationResult::Mutated;
+                                    break 'outer;
+                                }
+                            }
+                            size -= 1;
+                        }
+                        size = core::cmp::min(v.1.len(), len - i);
+                        while size != 0 {
+                            if v.1[0..size] == input.bytes()[i..i + size] {
+                                if !cmplog_meta.filter.as_mut().unwrap().check(&(cmp_values.clone(), start_idx)) {
+                                    unsafe {
+                                        buffer_copy(input.bytes_mut(), &v.0, 0, i, size);
+                                    }
+                                    result = MutationResult::Mutated;
+                                    break 'outer;
+                                }
+                            }
+                            size -= 1;
+                        }
+                        start_idx += 1;
+                    }
+                }
+            }
+
+            if result == MutationResult::Skipped {
+                drop(tc);
+                let meta = state.metadata_mut::<CmpValuesMetadata>().unwrap();
+                meta.list.swap_remove(cmpval_idx);
+                if meta.list.is_empty() {
+                    let mut tc = state.corpus().get(corpus_idx).unwrap().borrow_mut();
+                    let cmplog_meta = tc.metadata_map_mut().get_mut::<TestcaseCmpLogMetadata>().unwrap();
+                    cmplog_meta.all_individuals_tested = true;
+                    cmplog_meta.filter = None;
+                    println!("Finished testing all individual CmpValues for {:?}", corpus_idx);
+                    return Ok(result);
+                }
+            } else {
+                // mark this CmpValues as tested for this Testcase
+                cmplog_meta.filter.as_mut().unwrap().set(&(cmp_values.clone(), start_idx));
+                return Ok(result);
+            }
+        }
+    }
+
+    fn mutate_any<I, S>(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error>
+    where
+        S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
+        I: HasMutatorBytes,
+    {
+        let size = input.bytes().len();
 
         let cmps_len = {
             let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
@@ -446,24 +702,19 @@ where
             }
             meta.list.len()
         };
-        let idx = state.rand_mut().below(cmps_len);
+        let cmpval_idx = state.rand_mut().below(cmps_len);
 
         let off = state.rand_mut().below(size);
         let len = input.bytes().len();
         let bytes = input.bytes_mut();
 
-        let meta = state.metadata_mut::<CmpValuesMetadata>().unwrap();
-        // no point testing this one again, so remove it...
-        let cmp_values = &meta.list.swap_remove(idx);
-
-        let idx = state.corpus().current().unwrap();
-        let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
-        let cmplog_meta = tc.metadata_map_mut().get_mut::<TestcaseCmpLogMetadata>().unwrap();
-        // mark this CmpValues as tested for this Testcase
-        cmplog_meta.filter.set(&cmp_values);
+        let cmp_values = {
+            let meta = state.metadata_mut::<CmpValuesMetadata>().unwrap();
+            meta.list[cmpval_idx].clone()
+        };
 
         let mut result = MutationResult::Skipped;
-        match cmp_values {
+        match &cmp_values {
             CmpValues::U8(v) => {
                 for byte in bytes.iter_mut().take(len).skip(off) {
                     if *byte == v.0 {
@@ -593,21 +844,6 @@ where
         }
 
         Ok(result)
-    }
-}
-
-impl Named for I2SRandReplace {
-    fn name(&self) -> &Cow<'static, str> {
-        static NAME: Cow<'static, str> = Cow::Borrowed("I2SRandReplace");
-        &NAME
-    }
-}
-
-impl I2SRandReplace {
-    /// Creates a new `I2SRandReplace` struct.
-    #[must_use]
-    pub fn new() -> Self {
-        Self
     }
 }
 
