@@ -39,6 +39,7 @@ use libafl::{
 };
 use libafl_bolts::{
     current_time,
+    os::dup2,
     prelude::OwnedMutSlice,
     rands::StdRand,
     shmem::{ShMem, ShMemMetadata, ShMemProvider, StdShMemProvider},
@@ -262,8 +263,6 @@ fn fuzz(
         let new_fd = dup(io::stdout().as_raw_fd())?;
         File::from_raw_fd(new_fd)
     };
-    #[cfg(unix)]
-    let _file_null = File::open("/dev/null")?;
 
     // 'While the monitor are state, they are usually used in the broker - which is likely never restarted
     let monitor = SimpleMonitor::with_user_monitor(|s| {
@@ -468,15 +467,16 @@ fn fuzz(
         println!("We imported {} inputs from disk.", state.corpus().count());
     }
 
-    // // Remove target output (logs still survive)
-    // #[cfg(unix)]
-    // {
-    //     let null_fd = file_null.as_raw_fd();
-    //     dup2(null_fd, io::stdout().as_raw_fd())?;
-    //     if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
-    //         dup2(null_fd, io::stderr().as_raw_fd())?;
-    //     }
-    // }
+    // Remove target output (logs still survive)
+    #[cfg(unix)]
+    {
+        let file_null = File::open("/dev/null")?;
+        let null_fd = file_null.as_raw_fd();
+        // dup2(null_fd, io::stdout().as_raw_fd())?;
+        if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
+            dup2(null_fd, io::stderr().as_raw_fd())?;
+        }
+    }
     // // reopen file to make sure we're at the end
     // log.replace(OpenOptions::new().append(true).create(true).open(logfile)?);
 
