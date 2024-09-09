@@ -1086,7 +1086,7 @@ static bool IsBackEdge(BasicBlock *From, BasicBlock *To,
 // BB pruning.
 static bool IsInterestingCmp(ICmpInst *CMP, const DominatorTree *DT,
                              const SanitizerCoverageOptions &Options) {
-  if (!Options.NoPrune)
+  // if (!Options.NoPrune)
     if (CMP->hasOneUse())
       if (auto BR = dyn_cast<BranchInst>(CMP->user_back()))
         for (BasicBlock *B : BR->successors())

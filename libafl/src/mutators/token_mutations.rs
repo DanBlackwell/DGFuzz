@@ -445,11 +445,11 @@ impl I2SRandReplace
 
         let mut swap_vec = replacement.replacement_byte_values.to_owned();
         if swap_vec.len() <= 8 {
-            let rand = state.rand_mut().below(4);
+            let rand = state.rand_mut().below(8);
 
-            // 50% chance to copy exact (handles ==, <= and >=), 
-            // 25% chance to +1 or -1 (to deal with !=, > or < comparisons)
-            if rand > 1 {
+            // 75% chance to copy exact (handles ==, <= and >=), 
+            // 12.5% chance to +1 or -1 (to deal with !=, > or < comparisons)
+            if rand > 5 {
                 let mut num_val = if replacement.is_little_endian {
                     // assume unsigned (sorry)
                     let mut tmp = swap_vec.clone();
@@ -461,24 +461,17 @@ impl I2SRandReplace
                     u64::from_be_bytes(tmp.try_into().unwrap())
                 };
 
-                if rand == 2 {
+                if rand == 6 {
                     num_val += 1;
                 } else {
                     num_val -= 1;
                 }
-
-                // let og = swap_vec.clone();
 
                 swap_vec = if replacement.is_little_endian {
                     num_val.to_le_bytes()[0..swap_vec.len()].to_vec()
                 } else {
                     num_val.to_be_bytes()[(8 - swap_vec.len())..].to_vec()
                 };
-
-                // println!("{} {num_val} turning {:?} into {:?}", 
-                //     if rand == 2 { "added 1 to" } else { "subtracted 1 from" },
-                //     og, swap_vec
-                // );
             }
         }
 
@@ -510,7 +503,7 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        if state.rand_mut().below(2) == 1 {
+        if state.rand_mut().below(6) == 0 {
             let res = self.targeted_replace(state, input)?;
             // if there were no exact matches fall back to standard cmplog
             if res == MutationResult::Mutated { 
@@ -522,7 +515,9 @@ where
         }
 
         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
-            meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
+            if meta.current_mutation_type != DiscoveryMutationType::TargetedCmpLog {
+                meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
+            }
         }
 
         let cmps_len = {

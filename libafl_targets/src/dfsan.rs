@@ -138,7 +138,6 @@ where
             .program(dfsan_binary_path)
             .shmem_provider(shmem_provider, input_shmem_desc)
             .debug_child(false)
-            // .parse_afl_cmdline(arguments)
             .coverage_map_size(map_size)
             .timeout(timeout)
             .kill_signal(Signal::SIGKILL)
@@ -280,7 +279,7 @@ where
             labels
         }
 
-        const MAX_DEPENDENT_BYTES: usize = 50;
+        const MAX_DEPENDENT_BYTES: usize = 100;
         let mut bytes_depended_on_by_edge = {
             let mut tmp = HashMap::new();
             for e in required_edges {
@@ -379,8 +378,17 @@ where
             bytes.shrink_to_fit();
         }
 
+        let mut unique_bytes = HashSet::new();
+        for (_, bytes) in &bytes_depended_on_by_edge {
+            for byte_pos in bytes {
+                unique_bytes.insert(*byte_pos);
+            }
+        }
+
         println!(
-            "bytes depended on by edge: {:?}",
+            "bytes depended on by edge ({} unique bytes - full input len: {}): {:?}",
+            unique_bytes.len(),
+            input.len(),
             bytes_depended_on_by_edge
                 .iter()
                 .filter(|(_, x)| x.len() > 0)
@@ -483,6 +491,441 @@ where
             post.post_exec(state, corpus_idx)?;
             mark_feature_time!(state, PerfFeature::MutatePostExec);
         }
+
+        Ok(())
+    }
+
+    fn distributed_mutate_single_dependency(
+        &mut self,
+        fuzzer: &mut Z,
+        state: &mut E::State,
+        executor: &mut E,
+        manager: &mut EM,
+        num_mutations: usize,
+        corpus_idx: CorpusId,
+    ) -> Result<(), Error>
+    where
+        EM: UsesState<State = E::State> + EventFirer + EventRestarter,
+        E: HasObservers + Executor<EM, Z>,
+        E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
+        E::Input: HasMutatorBytes + HasTargetBytes,
+        Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
+    {
+        let tc_meta_copy = {
+            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
+            tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
+        };
+        let siblings_for_covered_bb = {
+            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
+            tc.metadata::<TestcaseDirectNeighboursMetadata>()
+                .unwrap()
+                .locally_uncovered_siblings_for_covered_bb
+                .clone()
+        };
+        let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
+
+        let mut power_for_mutation_target_bytes = HashMap::new();
+        let mut total_muts = 0usize;
+        let mut max_power = 0usize;
+
+        // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
+        for (current, siblings) in &siblings_for_covered_bb {
+            for sibling in siblings {
+                let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
+                    continue;
+                };
+                if dependent_bytes.is_empty() {
+                    continue;
+                }
+                let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+                // if we've already tested every possible value for this edge...
+                if dependent_bytes.len() == 1 && muts >= 256 {
+                    continue;
+                }
+
+                let mut power = 0;
+                let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
+                power += muts;
+
+                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
+                    *bytes_power += power;
+                    if *bytes_power > max_power {
+                        max_power = *bytes_power;
+                    }
+                } else {
+                    power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
+                    if power > max_power {
+                        max_power = power;
+                    }
+                }
+
+                total_muts += power;
+            }
+        }
+
+        // Calculate how much to mutate the bytes for each target edge
+        let mutations_for_target_bytes = {
+            let mut res = HashMap::new();
+            // we haven't fuzzed any of these yet! Fuzz them all the same amount
+            if total_muts == 0 {
+                let muts = f64::ceil(num_mutations as f64 / 
+                                     power_for_mutation_target_bytes.len() as f64) as usize;
+
+                for (target_bytes, _) in power_for_mutation_target_bytes {
+                    res.insert(target_bytes, muts);
+                }
+            // Assign more mutations to underserviced edges
+            } else {
+                let required_muts = power_for_mutation_target_bytes.len() * max_power - total_muts;
+                // we can catch all up to the same number of mutations
+                if required_muts < num_mutations {
+                    let mut available_muts = num_mutations;
+                    // make sure that all edges catch up to the same value
+                    for (target_bytes, muts) in &power_for_mutation_target_bytes {
+                        available_muts -= max_power - *muts;
+                        res.insert(target_bytes.to_owned(), max_power - *muts);
+                    }
+
+                    // distribute the remaining mutations fairly
+                    let power = f64::ceil(
+                        available_muts as f64 / power_for_mutation_target_bytes.len() as f64,
+                    ) as usize;
+
+                    for (_target_bytes, muts) in res.iter_mut() {
+                        *muts += power;
+                    }
+                } else {
+                    // best effort to even out mutations
+                    for (target_bytes, muts) in power_for_mutation_target_bytes {
+                        // figure out how far this edge is behind proportionally
+                        let to_perform = f64::ceil(
+                            ((max_power - muts) as f64 / required_muts as f64)
+                                * num_mutations as f64,
+                        ) as usize;
+
+                        if to_perform > 0 {
+                            res.insert(target_bytes, to_perform);
+                        }
+                    }
+                }
+            }
+            res
+        };
+
+        let original_input = {
+            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
+            tc.input().as_ref().unwrap().clone()
+        };
+
+        let mut mutator =
+            StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
+
+        // iterate through all of the edges with uncovered neighbours and test out
+        // num_mutations different mutants
+        for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
+            if target_bytes_pos.is_empty() {
+                continue;
+            }
+
+            // build a vec of the values of target bytes
+            let target_bytes = {
+                let mut res = Vec::with_capacity(target_bytes_pos.len());
+                for &pos in target_bytes_pos {
+                    res.push(original_input.bytes()[pos]);
+                }
+                res
+            };
+
+            // println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
+            let target_bytes_input = BytesInput::new(target_bytes.clone());
+
+            let globally_uncovered = {
+                let mut res = false;
+                let covered = &state
+                    .metadata::<MapNeighboursFeedbackMetadata>()
+                    .unwrap()
+                    .covered_blocks;
+                for cov_idx in &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos] {
+                    if !covered.contains(cov_idx) {
+                        res = true;
+                        break;
+                    }
+                }
+                res
+            };
+
+            // test out num_mutations different mutants
+            for _ in 0..*num_mutations {
+                let mut input = target_bytes_input.clone();
+
+                start_timer!(state);
+                let altered_bytes = if input.bytes().len() > 1 {
+                    // There are a few bytes to mutate here, use the mutator
+                    let mutated = mutator.mutate(state, &mut input).unwrap();
+
+                    if mutated == MutationResult::Skipped {
+                        continue;
+                    }
+
+                    input.bytes()
+                } else {
+                    // There is a single byte here - we can do an exhaustive search
+                    let bytes = input.bytes_mut();
+
+                    let mut tc = state.corpus_mut().get(corpus_idx).unwrap().borrow_mut();
+                    let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
+                    let tested_vals = tc_meta
+                        .mutations_tested_on_target_bytes
+                        .get_mut(target_bytes_pos)
+                        .unwrap();
+                    if bytes.len() == 1 && *tested_vals >= 256 {
+                        println!(
+                            "Dataflow Finished all possible combos for {:?} ({tested_vals})",
+                            *target_bytes_pos
+                        );
+                        // We've tested all combinations - bail
+                        break;
+                    }
+
+                    if bytes.len() == 1 {
+                        bytes[0] = *tested_vals as u8;
+                    } else {
+                        panic!("Not implemented!")
+                    }
+                    *tested_vals += 1;
+
+                    input.bytes()
+                };
+                mark_feature_time!(state, PerfFeature::Mutate);
+
+                let mut input = original_input.clone();
+                let bytes = input.bytes_mut();
+                // replace the target bytes with the mutated byte values
+                for (arr_idx, dest_pos) in target_bytes_pos.iter().enumerate() {
+                    bytes[*dest_pos] = altered_bytes[arr_idx];
+                }
+
+                let pre_covered = state
+                    .metadata::<MapNeighboursFeedbackMetadata>()
+                    .unwrap()
+                    .covered_blocks
+                    .len();
+
+                // Time is measured directly the `evaluate_input` function
+                let (untransformed, post) = input.try_transform_into(state).unwrap();
+                let (result, corpus_idx) =
+                    fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
+
+                if result == ExecuteInputResult::Corpus {
+                    let covered = &state
+                        .metadata::<MapNeighboursFeedbackMetadata>()
+                        .unwrap()
+                        .covered_blocks;
+                    let novs = covered.len() - pre_covered;
+                    println!(
+                        "Dataflow stage found a new corpus entry{}! globally uncovered: {}, target bytes len: {}",
+                        if novs > 0 { format!(" with {} novelties", novs) } else { format!("") },
+                        globally_uncovered,
+                        target_bytes_input.len()
+                    );
+                }
+
+                start_timer!(state);
+                mutator.post_exec(state, corpus_idx).unwrap();
+                post.post_exec(state, corpus_idx).unwrap();
+                mark_feature_time!(state, PerfFeature::MutatePostExec);
+            }
+        }
+
+        {
+            // update the mutation counts for all the targets
+            let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
+            for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
+                let bbs = &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos];
+                for bb_cov_map_idx in bbs {
+                    let count = df_meta.num_mutations_for_edge.get_mut(bb_cov_map_idx).unwrap();
+                    *count += *num_mutations;
+                }
+            }
+        }
+
+        #[cfg(feature = "introspection")]
+        state.introspection_monitor_mut().finish_stage();
+
+        Ok(())
+    }
+
+    fn distributed_mutate_mutli_dependency(
+        &mut self,
+        fuzzer: &mut Z,
+        state: &mut E::State,
+        executor: &mut E,
+        manager: &mut EM,
+        num_mutations: usize,
+        corpus_idx: CorpusId,
+    ) -> Result<(), Error>
+    where
+        EM: UsesState<State = E::State> + EventFirer + EventRestarter,
+        E: HasObservers + Executor<EM, Z>,
+        E::State: HasCorpus + HasMetadata + HasRand + HasExecutions + HasSolutions,
+        E::Input: HasMutatorBytes + HasTargetBytes,
+        Z: UsesState<State = E::State> + HasObjective + Evaluator<E, EM>,
+    {
+        let tc_meta_copy = {
+            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
+            tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
+        };
+        let siblings_for_covered_bb = {
+            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
+            tc.metadata::<TestcaseDirectNeighboursMetadata>()
+                .unwrap()
+                .locally_uncovered_siblings_for_covered_bb
+                .clone()
+        };
+        let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
+
+        let mut power_for_mutation_target_bytes = HashMap::new();
+        let mut total_power = 0usize;
+
+        // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
+        for (current, siblings) in &siblings_for_covered_bb {
+            for sibling in siblings {
+                let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
+                    continue;
+                };
+                if dependent_bytes.is_empty() {
+                    continue;
+                }
+                let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+
+                let mut power = 0;
+                let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
+                power += muts;
+
+                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
+                    *bytes_power += power;
+                } else {
+                    power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
+                }
+
+                total_power += power;
+            }
+        }
+
+        let mut mutations_for_target_bytes = HashMap::new();
+
+        let original_input = {
+            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
+            tc.input().as_ref().unwrap().clone()
+        };
+
+        let mut mutator = StdScheduledMutator::with_max_stack_pow(
+            havoc_mutations_fixed_length(), 1
+        );
+
+        let mut mutated_ranges = HashSet::new();
+
+        for _ in 0..num_mutations {
+            let num_sub_mutations = 1 + state.rand_mut().below(6);
+
+            start_timer!(state);
+
+            let mut mutated_input = original_input.clone();
+            for mutation_num in 0..num_sub_mutations {
+                // select a set of dependent bytes to apply a mutation to
+                let bytes_for_mut_indexes: Vec<usize> = {
+                    let mut res = None;
+                    let rand_val = state.rand_mut().below(total_power);
+                    let mut running_total = 0;
+                    for (dependent_bytes, power) in &power_for_mutation_target_bytes {
+                        running_total += power;
+                        if running_total >= rand_val {
+                            res = Some(dependent_bytes.to_owned());
+                            break;
+                        }
+                    }
+                    res.unwrap_or_else(|| 
+                        panic!("Failed to find power {rand_val} from {:?}", power_for_mutation_target_bytes)
+                    )
+                };
+
+                if mutated_ranges.insert(bytes_for_mut_indexes.clone()) {
+                    if let Some(count) = mutations_for_target_bytes.get_mut(&bytes_for_mut_indexes) {
+                        *count += 1;
+                    } else {
+                        mutations_for_target_bytes.insert(bytes_for_mut_indexes.clone(), 1);
+                    }
+                }
+
+                // build a vec of the values of target bytes
+                let bytes_for_mut_vals: Vec<u8> = bytes_for_mut_indexes.iter()
+                    .map(|&idx| mutated_input.bytes()[idx])
+                    .collect();
+
+                let mut sub_input = BytesInput::new(bytes_for_mut_vals);
+
+                let mutated = mutator.mutate(state, &mut sub_input).unwrap();
+                if mutated == MutationResult::Skipped {
+                    // mark this as unmutated for the effort balancer?
+                    // not for now - there's a much higher chance of skipping 
+                    // small inputs (1 or 2 bytes); so we'd maybe spin our wheels
+                    // hammering those 
+                }
+                let mutated_bytes = sub_input.bytes();
+
+                let bytes = mutated_input.bytes_mut();
+                // replace the target bytes with the mutated byte values
+                for (arr_idx, dest_pos) in bytes_for_mut_indexes.iter().enumerate() {
+                    bytes[*dest_pos] = mutated_bytes[arr_idx];
+                }
+            }
+            
+            mark_feature_time!(state, PerfFeature::Mutate);
+
+            let pre_covered = state
+                .metadata::<MapNeighboursFeedbackMetadata>()
+                .unwrap()
+                .covered_blocks
+                .len();
+
+            // Time is measured directly the `evaluate_input` function
+            let (untransformed, post) = mutated_input.try_transform_into(state).unwrap();
+            let (result, corpus_idx) =
+                fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
+
+            if result == ExecuteInputResult::Corpus {
+                let post_covered = state
+                    .metadata::<MapNeighboursFeedbackMetadata>()
+                    .unwrap()
+                    .covered_blocks
+                    .len();
+                let novs = post_covered - pre_covered;
+                println!(
+                    "Dataflow stage found a new corpus entry{}!",
+                    if novs > 0 { format!(" with {} novelties", novs) } else { format!("") }
+                );
+            }
+
+            start_timer!(state);
+            mutator.post_exec(state, corpus_idx).unwrap();
+            post.post_exec(state, corpus_idx).unwrap();
+            mark_feature_time!(state, PerfFeature::MutatePostExec);
+        }
+
+        {
+            // update the mutation counts for all the targets
+            let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
+            for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
+                let bbs = &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos];
+                for bb_cov_map_idx in bbs {
+                    let count = df_meta.num_mutations_for_edge.get_mut(bb_cov_map_idx).unwrap();
+                    *count += *num_mutations;
+                }
+            }
+        }
+
+        #[cfg(feature = "introspection")]
+        state.introspection_monitor_mut().finish_stage();
 
         Ok(())
     }
@@ -616,250 +1059,9 @@ where
         
         mark_feature_time!(state, PerfFeature::ComputeDataflowDependencies);
 
-        // self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations)?;
-
-        let tc_meta_copy = {
-            let tc = state.corpus().get(idx).unwrap().borrow();
-            tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
-        };
-        let siblings_for_covered_bb = {
-            let tc = state.corpus().get(idx).unwrap().borrow();
-            tc.metadata::<TestcaseDirectNeighboursMetadata>()
-                .unwrap()
-                .locally_uncovered_siblings_for_covered_bb
-                .clone()
-        };
-        let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
-
-        let mut power_for_mutation_target_bytes = HashMap::new();
-        let mut total_muts = 0usize;
-        let mut max_power = 0usize;
-
-        // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (current, siblings) in &siblings_for_covered_bb {
-            for sibling in siblings {
-                let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
-                    continue;
-                };
-                if dependent_bytes.is_empty() {
-                    continue;
-                }
-                let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
-                // if we've already tested every possible value for this edge...
-                if dependent_bytes.len() == 1 && muts >= 256
-                    // || (dependent_bytes.len() == 2 && muts >= 65536)
-                {
-                    continue;
-                }
-
-                let mut power = 0;
-                let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
-                power += muts;
-
-                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
-                    *bytes_power += power;
-                    if *bytes_power > max_power {
-                        max_power = *bytes_power;
-                    }
-                } else {
-                    power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
-                    if power > max_power {
-                        max_power = power;
-                    }
-                }
-
-                total_muts += power;
-            }
-        }
-
-        // Calculate how much to mutate the bytes for each target edge
-        let mutations_for_target_bytes = {
-            let mut res = HashMap::new();
-            // we haven't fuzzed any of these yet! Fuzz them all the same amount
-            if total_muts == 0 {
-                let muts = f64::ceil(num_mutations as f64 / 
-                                     power_for_mutation_target_bytes.len() as f64) as usize;
-
-                for (target_bytes, _) in power_for_mutation_target_bytes {
-                    res.insert(target_bytes, muts);
-                }
-            // Assign more mutations to underserviced edges
-            } else {
-                let required_muts = power_for_mutation_target_bytes.len() * max_power - total_muts;
-                // we can catch all up to the same number of mutations
-                if required_muts < num_mutations {
-                    let mut available_muts = num_mutations;
-                    // make sure that all edges catch up to the same value
-                    for (target_bytes, muts) in &power_for_mutation_target_bytes {
-                        available_muts -= max_power - *muts;
-                        res.insert(target_bytes.to_owned(), max_power - *muts);
-                    }
-
-                    // distribute the remaining mutations fairly
-                    let power = f64::ceil(
-                        available_muts as f64 / power_for_mutation_target_bytes.len() as f64,
-                    ) as usize;
-
-                    for (_target_bytes, muts) in res.iter_mut() {
-                        *muts += power;
-                    }
-                } else {
-                    // best effort to even out mutations
-                    for (target_bytes, muts) in power_for_mutation_target_bytes {
-                        // figure out how far this edge is behind proportionally
-                        let to_perform = f64::ceil(
-                            ((max_power - muts) as f64 / required_muts as f64)
-                                * num_mutations as f64,
-                        ) as usize;
-
-                        if to_perform > 0 {
-                            res.insert(target_bytes, to_perform);
-                        }
-                    }
-                }
-            }
-            res
-        };
-
-        let original_input = {
-            let tc = state.corpus().get(idx).unwrap().borrow();
-            tc.input().as_ref().unwrap().clone()
-        };
-
-        let mut mutator =
-            StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 6);
-
-        // iterate through all of the edges with uncovered neighbours and test out
-        // num_mutations different mutants
-        for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
-            if target_bytes_pos.is_empty() {
-                continue;
-            }
-
-            // build a vec of the values of target bytes
-            let target_bytes = {
-                let mut res = Vec::with_capacity(target_bytes_pos.len());
-                for &pos in target_bytes_pos {
-                    res.push(original_input.bytes()[pos]);
-                }
-                res
-            };
-
-            // println!("For parent {parent} running {num_mutations} mutations on bytes {:?}", target_byte_pos);
-            let target_bytes_input = BytesInput::new(target_bytes.clone());
-
-            // test out num_mutations different mutants
-            for _ in 0..*num_mutations {
-                let mut input = target_bytes_input.clone();
-
-                start_timer!(state);
-                let altered_bytes = if input.bytes().len() > 1 {
-                    // There are a few bytes to mutate here, use the mutator
-                    let mutated = mutator.mutate(state, &mut input).unwrap();
-
-                    if mutated == MutationResult::Skipped {
-                        continue;
-                    }
-
-                    // Select from uniform
-                    // let mut idx = 0;
-                    // while idx < input.bytes().len() {
-                    //     let rand_bytes = state.rand_mut().next().to_ne_bytes();
-                    //     for rand_byte in rand_bytes {
-                    //         if idx >= input.bytes().len() {
-                    //             break;
-                    //         }
-                    //         input.bytes_mut()[idx] = rand_byte;
-                    //         idx += 1;
-                    //     }
-                    // }
-
-                    input.bytes()
-                } else {
-                    // There is a single byte here - we can do an exhaustive search
-                    let bytes = input.bytes_mut();
-
-                    let mut tc = state.corpus_mut().get(idx).unwrap().borrow_mut();
-                    let tc_meta = tc.metadata_mut::<TestcaseDataflowMetadata>().unwrap();
-                    let tested_vals = tc_meta
-                        .mutations_tested_on_target_bytes
-                        .get_mut(target_bytes_pos)
-                        .unwrap();
-                    if bytes.len() == 1 && *tested_vals >= 256 {
-                        println!(
-                            "Dataflow Finished all possible combos for {:?} ({tested_vals})",
-                            *target_bytes_pos
-                        );
-                        // We've tested all combinations - bail
-                        break;
-                    }
-
-                    if bytes.len() == 1 {
-                        bytes[0] = *tested_vals as u8;
-                    } else {
-                        panic!("Not implemented!")
-                    }
-                    *tested_vals += 1;
-
-                    input.bytes()
-                };
-                mark_feature_time!(state, PerfFeature::Mutate);
-
-                let mut input = original_input.clone();
-                let bytes = input.bytes_mut();
-                // replace the target bytes with the mutated byte values
-                for (arr_idx, dest_pos) in target_bytes_pos.iter().enumerate() {
-                    bytes[*dest_pos] = altered_bytes[arr_idx];
-                }
-
-                let pre_covered = state
-                    .metadata::<MapNeighboursFeedbackMetadata>()
-                    .unwrap()
-                    .covered_blocks
-                    .len();
-
-                // Time is measured directly the `evaluate_input` function
-                let (untransformed, post) = input.try_transform_into(state).unwrap();
-                let (result, corpus_idx) =
-                    fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
-
-                if result == ExecuteInputResult::Corpus {
-                    let post_covered = state
-                        .metadata::<MapNeighboursFeedbackMetadata>()
-                        .unwrap()
-                        .covered_blocks
-                        .len();
-                    let novs = post_covered - pre_covered;
-                    println!(
-                        "Dataflow stage found a new corpus entry{}! (through exhaustive testing: {})",
-                        if novs > 0 { format!(" with {} novelties", novs) } else { format!("") },
-                        target_bytes_input.len() < 2
-                    );
-                }
-
-                start_timer!(state);
-                mutator.post_exec(state, corpus_idx).unwrap();
-                post.post_exec(state, corpus_idx).unwrap();
-                mark_feature_time!(state, PerfFeature::MutatePostExec);
-            }
-        }
-
-        {
-            // update the mutation counts for all the targets
-            let df_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
-                let bbs = &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos];
-                for bb_cov_map_idx in bbs {
-                    let count = df_meta.num_mutations_for_edge.get_mut(bb_cov_map_idx).unwrap();
-                    *count += *num_mutations;
-                }
-            }
-        }
-
-        #[cfg(feature = "introspection")]
-        state.introspection_monitor_mut().finish_stage();
-
-        Ok(())
+        // return self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations);
+        // return self.distributed_mutate_mutli_dependency(fuzzer, state, executor, manager, num_mutations, idx);
+        return self.distributed_mutate_single_dependency(fuzzer, state, executor, manager, num_mutations, idx);
     }
 
     fn restart_progress_should_run(

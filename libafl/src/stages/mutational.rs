@@ -109,10 +109,6 @@ where
     ) -> Result<(), Error> {
         start_timer!(state);
 
-        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
-            meta.current_mutation_type = DiscoveryMutationType::StandardHavoc;
-        }
-
         // Here saturating_sub is needed as self.iterations() might be actually smaller than the previous value before reset.
         /*
         let num = self
@@ -136,6 +132,10 @@ where
         mark_feature_time!(state, PerfFeature::GetInputFromCorpus);
 
         for _ in 0..num {
+            if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+                meta.current_mutation_type = DiscoveryMutationType::StandardHavoc;
+            }
+
             let mut input = input.clone();
 
             start_timer!(state);

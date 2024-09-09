@@ -347,7 +347,9 @@ fn fuzz(
     }
 
     // Setup a randomic Input2State stage
-    let i2s = StdMutationalStage::new(StdScheduledMutator::new(tuple_list!(I2SRandReplace::new())));
+    let i2s = StdMutationalStage::new(
+        StdScheduledMutator::with_max_stack_pow(tuple_list!(I2SRandReplace::new()), 6)
+    );
 
     // Setup a MOPT mutator
     // let mutator = StdMOptMutator::new(
@@ -474,7 +476,7 @@ fn fuzz(
         let null_fd = file_null.as_raw_fd();
         // dup2(null_fd, io::stdout().as_raw_fd())?;
         if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
-            dup2(null_fd, io::stderr().as_raw_fd())?;
+            // dup2(null_fd, io::stderr().as_raw_fd())?;
         }
     }
     // // reopen file to make sure we're at the end
