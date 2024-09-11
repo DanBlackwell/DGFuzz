@@ -170,16 +170,18 @@ impl CmpValuesMetadata {
 
         for cmp_values in &self.list {
             // convert to vecs
-            let (mut cmp1, mut cmp2) = match cmp_values {
+            let (max_trim, mut cmp1, mut cmp2) = match cmp_values {
                 // makes no sense to strip u8 or u16s
-                CmpValues::U8(v) => (vec![v.0], vec![v.1]),
-                CmpValues::U16(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
+                CmpValues::U8(v)    => (0, vec![v.0], vec![v.1]),
+                CmpValues::U16(v)   => (0, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                // maybe a 24-bit int stuffed into a 32-bit
+                CmpValues::U32(v)   => (1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                // maybe a 40-56-bit int stuffed into a 64-bit
+                CmpValues::U64(v)   => (3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                CmpValues::Bytes(v) => (0, v.0.to_owned(), v.1.to_owned())
             };
 
-            // strip leading and trailing zeroes
+            // count how many leading or trailing zeroes
             let mut start = 0;
             for idx in 0..cmp1.len() {
                 start = idx;
@@ -195,39 +197,45 @@ impl CmpValuesMetadata {
                 if end == 1 { break; } else { end -= 1; }
             }
 
-            if start < end {
-                cmp1 = cmp1[start..end].to_vec();
-                cmp2 = cmp2[start..end].to_vec();
-            } else {
-                // Both sides of the cmplog were all zeroes...
-                continue;
+            let mut trimmed_cmps = vec![];
+            if start > max_trim {
+                start = max_trim;
+            }
+            trimmed_cmps.push((cmp1[start..].to_vec(), cmp2[start..].to_vec()));
+            if max_trim > 0 && cmp1.len() - end > 0 {
+                if cmp1.len() - end > max_trim {
+                    end = cmp1.len() - max_trim;
+                }
+                trimmed_cmps.push((cmp1[..end].to_vec(), cmp2[..end].to_vec()));
             }
 
             let len = input.bytes().len();
             let bytes = &input.bytes();
 
-            // collect up matches for cmpval side 1
-            memmem::find_iter(&bytes, &cmp1).for_each(|start_idx| { 
-                replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp2.clone() }); 
-            });
-            // if it's a palindrome we'll match it either direction
-            let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-            let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-            if cmp1 != rev1 {
-                memmem::find_iter(&bytes, &rev1).for_each(|start_idx| { 
-                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev2.clone() }); 
+            for (cmp1, cmp2) in trimmed_cmps {
+                // collect up matches for cmpval side 1
+                memmem::find_iter(&bytes, &cmp1).for_each(|start_idx| { 
+                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp2.clone() }); 
                 });
-            }
+                // if it's a palindrome we'll match it either direction
+                let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+                let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
+                if cmp1 != rev1 {
+                    memmem::find_iter(&bytes, &rev1).for_each(|start_idx| { 
+                        replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev2.clone() }); 
+                    });
+                }
 
-            // collect up matches for cmpval side 2
-            memmem::find_iter(&bytes, &cmp2).for_each(|start_idx| { 
-                replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp1.clone() }); 
-            });
-            // if it's a palindrome we'll match it either direction
-            if cmp2 != rev2 {
-                memmem::find_iter(&bytes, &rev2).for_each(|start_idx| { 
-                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev1.clone() }); 
+                // collect up matches for cmpval side 2
+                memmem::find_iter(&bytes, &cmp2).for_each(|start_idx| { 
+                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp1.clone() }); 
                 });
+                // if it's a palindrome we'll match it either direction
+                if cmp2 != rev2 {
+                    memmem::find_iter(&bytes, &rev2).for_each(|start_idx| { 
+                        replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev1.clone() }); 
+                    });
+                }
             }
         }
 
@@ -266,41 +274,47 @@ impl CmpValuesMetadata {
                 let Some(cmpvals) = self.map.get(&(parent.0 as usize)) else { continue; };
                 if cmpvals.is_empty() { continue; }
 
-                let trimmed_cmps = cmpvals.into_iter()
-                    .map(|c| {
-                        // convert to vecs
-                        let (buf1, buf2) = match c {
-                            // makes no sense to strip u8 or u16s
-                            CmpValues::U8(v) => return (vec![v.0], vec![v.1]),
-                            CmpValues::U16(v) => return (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                            CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                            CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                            CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
-                        };
+                let mut trimmed_cmps = vec![]; 
+                for cmp_values in cmpvals {
+                    // convert to vecs
+                    let (max_trim, cmp1, cmp2) = match cmp_values {
+                        // makes no sense to strip u8 or u16s
+                        CmpValues::U8(v)    => (0, vec![v.0], vec![v.1]),
+                        CmpValues::U16(v)   => (0, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        // maybe a 24-bit int stuffed into a 32-bit
+                        CmpValues::U32(v)   => (1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        // maybe a 40-56-bit int stuffed into a 64-bit
+                        CmpValues::U64(v)   => (3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::Bytes(v) => (0, v.0.to_owned(), v.1.to_owned())
+                    };
 
-                        // strip leading and trailing zeroes
-                        let mut start = 0;
-                        for idx in 0..buf1.len() {
-                            start = idx;
-                            if buf1[idx] != 0 || buf1[idx] != buf2[idx] {
-                                break;
-                            }
+                    // strip leading and trailing zeroes
+                    let mut start = 0;
+                    for idx in 0..cmp1.len() {
+                        start = idx;
+                        if cmp1[idx] != 0 || cmp1[idx] != cmp2[idx] {
+                            break;
                         }
-                        let mut end = buf1.len();
-                        loop {
-                            if buf1[end - 1] != 0 || buf1[end - 1] != buf2[end - 1] {
-                                break;
-                            }
-                            if end == 1 { break; } else { end -= 1; }
+                    }
+                    let mut end = cmp1.len();
+                    loop {
+                        if cmp1[end - 1] != 0 || cmp1[end - 1] != cmp2[end - 1] {
+                            break;
                         }
+                        if end == 1 { break; } else { end -= 1; }
+                    }
 
-                        // println!("stripping {:?} to range {start}..{end}", c);
-                        if start < end {
-                            (buf1[start..end].to_vec(), buf2[start..end].to_vec())
-                        } else {
-                            (vec![], vec![])
+                    if start > max_trim {
+                        start = max_trim;
+                    }
+                    trimmed_cmps.push((cmp1[start..].to_vec(), cmp2[start..].to_vec()));
+                    if cmp1.len() - end > 0 {
+                        if cmp1.len() - end > max_trim {
+                            end = cmp1.len() - max_trim;
                         }
-                    });
+                        trimmed_cmps.push((cmp1[..end].to_vec(), cmp2[..end].to_vec()));
+                    }
+                }
 
                 for range in byte_indexes.raw_ranges() {
                     let byte_vals: Vec<u8> = {
