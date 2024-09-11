@@ -181,13 +181,13 @@ where
         buf[0] = labels.len() as u8;
         let mut pos = 1;
         for label in labels {
-            buf[pos] = ((label.start_pos >> 24) & 0xFF) as u8;
+            buf[pos]     = ((label.start_pos >> 24) & 0xFF) as u8;
             buf[pos + 1] = ((label.start_pos >> 16) & 0xFF) as u8;
             buf[pos + 2] = ((label.start_pos >> 8) & 0xFF) as u8;
             buf[pos + 3] = (label.start_pos & 0xFF) as u8;
             pos += 4;
 
-            buf[pos] = ((label.len >> 24) & 0xFF) as u8;
+            buf[pos]     = ((label.len >> 24) & 0xFF) as u8;
             buf[pos + 1] = ((label.len >> 16) & 0xFF) as u8;
             buf[pos + 2] = ((label.len >> 8) & 0xFF) as u8;
             buf[pos + 3] = (label.len & 0xFF) as u8;
@@ -1029,9 +1029,6 @@ where
                 uncovered_bbs_depending_on_bytes,
             };
             state.corpus().get(idx).unwrap().borrow_mut().add_metadata(meta);
-
-            // TODO: We should really keep track of the parents rather than siblings
-            //       as there can be many siblings for one parent (eg switch statements)
 
             // Add any new neighbours to the effort tracker
             let uncovered_bbs_with_covered_sibs = {
