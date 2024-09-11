@@ -230,13 +230,14 @@ impl CmpValuesMetadata {
                             })
                             .for_each(|v| { all_replacements.insert(v); });
                         // if it's a palindrome we'll match it either direction
-                        let rev: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-                        if cmp1 != rev {
-                            memmem::find_iter(&byte_vals, &rev)
+                        let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+                        let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
+                        if cmp1 != rev1 {
+                            memmem::find_iter(&byte_vals, &rev1)
                                 .map(|idx| TargetedCmpValReplace {
                                     input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
                                     input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                    replacement_byte_values: rev.clone(),
+                                    replacement_byte_values: rev2.clone(),
                                     is_little_endian: true
                                 })
                                 .for_each(|v| { all_replacements.insert(v); });
@@ -252,13 +253,12 @@ impl CmpValuesMetadata {
                             })
                             .for_each(|v| { all_replacements.insert(v); });
                         // if it's a palindrome we'll match it either direction
-                        let rev: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-                        if cmp2 != rev {
-                            memmem::find_iter(&byte_vals, &rev)
+                        if cmp2 != rev2 {
+                            memmem::find_iter(&byte_vals, &rev2)
                                 .map(|idx| TargetedCmpValReplace {
                                     input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
                                     input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                    replacement_byte_values: rev.clone(),
+                                    replacement_byte_values: rev1.clone(),
                                     is_little_endian: true
                                 })
                                 .for_each(|v| { all_replacements.insert(v); });
