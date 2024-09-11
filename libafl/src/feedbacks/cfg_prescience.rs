@@ -59,11 +59,11 @@ pub struct ControlFlowGraph {
     /// A vec of all the edges
     pub(crate) all_edges: Vec<ControlFlowGraphBB>,
     /// returns a list of indexes (for self.all_edges) which are in the func with the given name
-    pub(crate) edges_in_func_named: HashMap<String, Vec<Vec<usize>>>,
+    pub(crate) edges_in_func_named: HashMap<String, Vec<Vec<u32>>>,
     /// returns an index for self.all_edges with the matching uuid
-    edge_with_uuid: HashMap<BasicBlockUUID, usize>,
+    edge_with_uuid: HashMap<BasicBlockUUID, u32>,
     /// returns an index for self.all_edges with the matching coverage map index
-    edge_with_coverage_map_idx: HashMap<CoverageMapIdx, usize>,
+    edge_with_coverage_map_idx: HashMap<CoverageMapIdx, u32>,
     /// A HashSet of all the IDs from functions that appear more than once
     duplicate_cov_map_idxs: HashSet<CoverageMapIdx>,
     /// List of functions that need their entry blocks recalculating (now we figured out which
@@ -113,7 +113,7 @@ impl ControlFlowGraph {
             let mut nodes_string = "".to_string();
             let mut internal_edges_string = "".to_string();
             for (pos, edge) in edges.iter().enumerate() {
-                let bb = self.all_edges[*edge].clone();
+                let bb = self.all_edges[*edge as usize].clone();
                 let neighbours;
                 if let Some(f) = &bb.is_first_cov_map_block_in_function {
                     assert!(pos == 0 && *f == *function, "pos: {pos}, f: {f}, function: {function}");
@@ -162,7 +162,7 @@ impl ControlFlowGraph {
                             cross_function = true; 
                             let dest_func_edge_lists = &self.edges_in_func_named[func];
                             if !edge_lists.is_empty() && !edge_lists[0].is_empty() {
-                                dest_node = self.all_edges[dest_func_edge_lists[0][0]].uuid.0;
+                                dest_node = self.all_edges[dest_func_edge_lists[0][0] as usize].uuid.0;
                             } else {
                                 dest_node = dest_bb.uuid.0;
                             }
@@ -304,7 +304,7 @@ impl ControlFlowGraph {
                     // function: fname.clone(),
                     dummy: false,
                 };
-                let index = self.all_edges.len();
+                let index = self.all_edges.len() as u32;
 
                 self.edge_with_uuid.insert(bb.uuid, index);
                 if let Some(idx) = bb.coverage_map_idx {
@@ -316,7 +316,7 @@ impl ControlFlowGraph {
                 for &instr_idx in &bb.instrumented_instructions_cov_map_idxs {
                     self.edge_with_coverage_map_idx.insert(instr_idx, index);
                 }
-                edges_in_func.push(index);
+                edges_in_func.push(index as u32);
                 self.all_edges.push(bb);
             }
 
@@ -346,7 +346,7 @@ impl ControlFlowGraph {
         // index. This allows us to skip a layer of indirection and do fast graph traversal. This
         // code is finnicky, don't mess with it... (but the assertions should help if you do)
         let mut aligned_bbs = vec![];
-        let mut replacement_edges_in_func_named = HashMap::new();
+        let mut replacement_edges_in_func_named: HashMap<String, Vec<Vec<u32>>> = HashMap::new();
         let mut unstored_uuids = self.all_edges.iter()
             .map(|bb| bb.uuid)
             .collect::<HashSet<BasicBlockUUID>>();
@@ -356,9 +356,9 @@ impl ControlFlowGraph {
             assert!(aligned_bbs.len() == idx as usize);
 
             if let Some(all_edges_idx) = self.edge_with_coverage_map_idx.get(&CoverageMapIdx(idx)) {
-                let bb = self.all_edges[*all_edges_idx].clone(); 
+                let bb = self.all_edges[*all_edges_idx as usize].clone(); 
                 unstored_uuids.remove(&bb.uuid);
-                self.edge_with_uuid.insert(bb.uuid, idx as usize);
+                self.edge_with_uuid.insert(bb.uuid, idx);
 
                 let func = &func_name_for_edge[&bb.uuid];
                 // There may be multiple definitions of this function, find out which one this is
@@ -388,9 +388,9 @@ impl ControlFlowGraph {
                 }
                 
                 if bb.is_first_cov_map_block_in_function.is_some() {
-                    new_edge_lists[version].insert(0, idx as usize);
+                    new_edge_lists[version].insert(0, idx);
                 } else {
-                    new_edge_lists[version].push(idx as usize);
+                    new_edge_lists[version].push(idx);
                 }
 
                 aligned_bbs.push(bb);
@@ -417,12 +417,12 @@ impl ControlFlowGraph {
             aligned_bbs.iter().map(|bb| bb.coverage_map_idx).collect::<Vec<Option<CoverageMapIdx>>>());
 
         for unstored_uuid in unstored_uuids {
-            let all_edges_idx = self.edge_with_uuid[&unstored_uuid];
+            let all_edges_idx = self.edge_with_uuid[&unstored_uuid] as usize;
             let bb = self.all_edges[all_edges_idx].clone();
             assert!(bb.uuid == unstored_uuid && bb.coverage_map_idx.is_none(),
                     "bb.uuid: {:?} should = {:?} and bb.coverage_map_idx should be none (is {:?})",
                     bb.uuid, unstored_uuid, bb.coverage_map_idx);
-            let new_index = aligned_bbs.len();
+            let new_index = aligned_bbs.len() as u32;
             self.edge_with_uuid.insert(unstored_uuid, new_index);
 
             let func = &func_name_for_edge[&bb.uuid];
@@ -431,7 +431,7 @@ impl ControlFlowGraph {
             if edge_lists.len() == 1 { self.confirmed_functions.insert(func.to_owned()); }
             let mut version = 99999;
             for (idx, edge_list) in edge_lists.iter().enumerate() {
-                if edge_list.contains(&all_edges_idx) {
+                if edge_list.contains(&(all_edges_idx as u32)) {
                     version = idx;
                     break;
                 }
@@ -468,7 +468,7 @@ impl ControlFlowGraph {
             for (index, edge_list) in edge_lists.iter().enumerate() {
                 let mut reachability = 0;
                 for edge in edge_list {
-                    let bb = &aligned_bbs[*edge];
+                    let bb = &aligned_bbs[*edge as usize];
                     if bb.coverage_map_idx.is_some() { reachability += 1; }
                     reachability += bb.called_funcs.len();
                     reachability += bb.num_indirect_calls as usize;
@@ -505,7 +505,7 @@ impl ControlFlowGraph {
             for (list_num, edge_list) in edge_lists.iter().enumerate() {
                 for (idx_in_list, all_edges_idx) in edge_list.iter().enumerate() {
                     let Some(alt_cov_idx) = alt_cfg
-                        .all_edges[*all_edges_idx]
+                        .all_edges[*all_edges_idx as usize]
                         .coverage_map_idx 
                         else { 
                             continue;
@@ -515,7 +515,7 @@ impl ControlFlowGraph {
                         self_edge_lists[list_num].len() <= idx_in_list {
                         continue;
                     }
-                    let self_edge = &self.all_edges[self_edge_lists[list_num][idx_in_list]];
+                    let self_edge = &self.all_edges[self_edge_lists[list_num][idx_in_list] as usize];
                     let self_cov_idx = self_edge.coverage_map_idx.unwrap();
                     if self_cov_idx != alt_cov_idx {
                         mismatches.insert((self_cov_idx, alt_cov_idx));
@@ -560,7 +560,7 @@ impl ControlFlowGraph {
         // Seems there's no instrumentation...
         if edges_in_func.is_none() { return None; }
         
-        let first_idx = edges_in_func.unwrap()[0];
+        let first_idx = edges_in_func.unwrap()[0] as usize;
         let first_bb = &self.all_edges[first_idx];
 
         if let Some(idx) = first_bb.coverage_map_idx {
@@ -644,7 +644,7 @@ impl ControlFlowGraph {
     /// Return a Vec of the first coverage map indexes that can be reached from the block with a given uuid
     fn append_first_cov_map_idxs(&mut self, covered: &mut HashSet<CoverageMapIdx>, predecessors: &mut HashSet<BasicBlockUUID>, uuid: BasicBlockUUID) {
         let idx = self.edge_with_uuid.get(&uuid).unwrap();
-        let bb = &mut self.all_edges[*idx];
+        let bb = &mut self.all_edges[*idx as usize];
 
         if let Some(this_idx) = bb.coverage_map_idx {
             covered.insert(this_idx);
@@ -693,10 +693,10 @@ impl ControlFlowGraph {
         for func in covered_funcs {
             if !self.confirmed_functions.contains(func) {
                 let edge_lists = self.edges_in_func_named.get(func).unwrap();
-                let sought_index = index_for_func.get(func).unwrap();
+                let sought_index = *index_for_func.get(func).unwrap() as u32;
                 let mut list_num = 99999;
                 for (idx, edge_list) in edge_lists.iter().enumerate() {
-                    if edge_list.contains(sought_index) {
+                    if edge_list.contains(&sought_index) {
                         list_num = idx;
                         break;
                     }
@@ -822,7 +822,7 @@ impl ControlFlowGraph {
                                 println!("No edges for func {func}");
                                 continue;
                             }
-                            let first_edge = edges_in_func[0][0];
+                            let first_edge = edges_in_func[0][0] as usize;
                             queue.push_back((depth, first_edge, direct_neighbour_predecessor));
                         }
                     }
@@ -901,7 +901,7 @@ impl ControlFlowGraph {
             let mut covered_succs = vec![];
             let mut locally_uncovered_succs = HashSet::new();
             for succ_uuid in &bb.successor_uuids {
-                let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid]]
+                let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid] as usize]
                     .coverage_map_idx else { continue; };
                 let succ_idx = succ_cov_map_idx.0 as usize;
                 if !locally_covered_set.contains(&succ_idx) {
@@ -946,7 +946,7 @@ impl ControlFlowGraph {
             let mut locally_uncovered_succs = HashSet::new();
             let mut found = false;
             for succ_uuid in &bb.successor_uuids {
-                let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid]]
+                let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid] as usize]
                     .coverage_map_idx else { continue; };
                 if !locally_covered_set.contains(&succ_cov_map_idx) {
                     locally_uncovered_succs.insert(succ_cov_map_idx);

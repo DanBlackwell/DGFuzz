@@ -574,7 +574,14 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        let off = state.rand_mut().below(size - cmp1.len());
+        let off = if cmp1.len() == size {
+            0
+        } else if cmp1.len() < size {
+            state.rand_mut().below(size - cmp1.len())
+        } else {
+            return Ok(MutationResult::Skipped);
+        };
+
         let len = input.bytes().len();
         let bytes = &input.bytes()[off..];
 
