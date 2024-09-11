@@ -162,7 +162,7 @@ impl CmpValuesMetadata {
         for (bb_cov_map_idx, byte_indexes) in &df_meta.bytes_depended_on_by_uncovered_bb {
             if byte_indexes.raw_ranges().is_empty() { continue; }
             // filter out any globally covered edges
-            // if covered_blocks.contains(bb_cov_map_idx) { continue; }
+            if covered_blocks.contains(bb_cov_map_idx) { continue; }
             let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) else { continue; };
             let Some(cmpvals) = self.map.get(parent) else { continue; };
             if cmpvals.is_empty() { continue; }

@@ -358,8 +358,9 @@ fn fuzz(
     //     7,
     //     5,
     // )?;
-    let mutator =
-        StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+    let mutator = StdScheduledMutator::with_max_stack_pow(
+        havoc_mutations().merge(tokens_mutations()), 7
+    );
 
     let mutation = StdMutationalStage::with_max_iterations(mutator, 128);
 

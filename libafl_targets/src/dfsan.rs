@@ -974,10 +974,6 @@ where
             return Ok(());
         };
 
-        if found_time.elapsed() < std::time::Duration::from_secs(3) {
-            return Ok(());
-        }
-
         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
             meta.current_mutation_type = DiscoveryMutationType::DataflowGuidedHavoc;
         }
@@ -994,6 +990,12 @@ where
 
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
+            // The campaign is still going fast, so don't waste time computing DF-dependencies
+            // that may never be used
+            if found_time.elapsed() < std::time::Duration::from_secs(3) {
+                return Ok(());
+            }
+
             let start = std::time::Instant::now();
 
             let siblings_for_covered_bb: HashMap<usize, Vec<usize>> = tc

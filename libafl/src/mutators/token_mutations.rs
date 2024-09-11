@@ -445,7 +445,7 @@ impl I2SRandReplace
 
         let current_vals = replacement.input_byte_values.to_owned();
         let mut swap_vec = replacement.replacement_byte_values.to_owned();
-        // These values are equal - but the branch is uncovered, so presumably it's a !=, > or <
+        // These values are equal - but the branch is uncovered, so presumably it's either !=, > or <
         if current_vals == swap_vec {
             // increment or decrement
             let inc = state.rand_mut().below(2) == 0;
