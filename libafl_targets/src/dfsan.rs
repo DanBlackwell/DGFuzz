@@ -9,7 +9,7 @@ use std::path::PathBuf;
 // use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
     dataflow_metadata::{
-        FuzzerDataflowMetadata, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata,
+        FuzzerDataflowMetadata, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata, DependentBytes
     },
     ownedref::OwnedMutSlice,
     rands::Rand,
@@ -239,7 +239,7 @@ where
         state: &mut E::State,
         manager: &mut EM,
         required_edges: &[usize],
-    ) -> Result<HashMap<usize, Vec<usize>>, Error>
+    ) -> Result<HashMap<usize, DependentBytes>, Error>
     where
         EM: UsesState<State = E::State> + EventFirer + EventRestarter,
         E: HasObservers + Executor<EM, Z>,
@@ -373,13 +373,11 @@ where
             populate_dependent += start.elapsed();
         }
 
-        for (_edge_idx, bytes) in bytes_depended_on_by_edge.iter_mut() {
-            bytes.sort();
-            bytes.shrink_to_fit();
-        }
-
         let mut unique_bytes = HashSet::new();
-        for (_, bytes) in &bytes_depended_on_by_edge {
+        let mut condensed = HashMap::new();
+        for (edge_idx, bytes) in bytes_depended_on_by_edge.iter_mut() {
+            bytes.sort();
+            condensed.insert(*edge_idx, DependentBytes::from_sorted_vec(&bytes));
             for byte_pos in bytes {
                 unique_bytes.insert(*byte_pos);
             }
@@ -405,7 +403,7 @@ where
         println!("getting dependencies breakdown, exec time: {:?} ({execs} execs {:?} each), filter reqs: {:?}, populate dependent: {:?}",
             exec_time, exec_time / execs, filter_req_time, populate_dependent);
 
-        Ok(bytes_depended_on_by_edge)
+        Ok(condensed)
     }
 
     fn do_simple_mutate(
@@ -437,9 +435,9 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
             let mut res = HashSet::new();
-            for (_edge, bytes) in &df_meta.bytes_depended_on_by_uncovered_bb {
-                for byte_pos in bytes {
-                    res.insert(*byte_pos);
+            for (_edge, byte_dependencies) in &df_meta.bytes_depended_on_by_uncovered_bb {
+                for idx in byte_dependencies.to_list() {
+                    res.insert(idx);
                 }
             }
             res
@@ -534,12 +532,14 @@ where
                 let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
                     continue;
                 };
-                if dependent_bytes.is_empty() {
+                if dependent_bytes.raw_ranges().is_empty() {
                     continue;
                 }
                 let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
                 // if we've already tested every possible value for this edge...
-                if dependent_bytes.len() == 1 && muts >= 256 {
+                if dependent_bytes.raw_ranges().len() == 1 && 
+                    dependent_bytes.raw_ranges()[0].clone().count() == 1 && 
+                    muts >= 256 {
                     continue;
                 }
 
@@ -553,7 +553,7 @@ where
                         max_power = *bytes_power;
                     }
                 } else {
-                    power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
+                    power_for_mutation_target_bytes.insert(dependent_bytes.clone(), power);
                     if power > max_power {
                         max_power = power;
                     }
@@ -622,15 +622,15 @@ where
 
         // iterate through all of the edges with uncovered neighbours and test out
         // num_mutations different mutants
-        for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
-            if target_bytes_pos.is_empty() {
+        for (&ref target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
+            if target_bytes_pos.raw_ranges().is_empty() {
                 continue;
             }
 
             // build a vec of the values of target bytes
             let target_bytes = {
-                let mut res = Vec::with_capacity(target_bytes_pos.len());
-                for &pos in target_bytes_pos {
+                let mut res = Vec::new();
+                for pos in target_bytes_pos.to_list() {
                     res.push(original_input.bytes()[pos]);
                 }
                 res
@@ -645,7 +645,7 @@ where
                     .metadata::<MapNeighboursFeedbackMetadata>()
                     .unwrap()
                     .covered_blocks;
-                for cov_idx in &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos] {
+                for cov_idx in tc_meta_copy.uncovered_bbs_depending_on_bytes.get(target_bytes_pos).unwrap() {
                     if !covered.contains(cov_idx) {
                         res = true;
                         break;
@@ -681,7 +681,7 @@ where
                     if bytes.len() == 1 && *tested_vals >= 256 {
                         println!(
                             "Dataflow Finished all possible combos for {:?} ({tested_vals})",
-                            *target_bytes_pos
+                            target_bytes_pos
                         );
                         // We've tested all combinations - bail
                         break;
@@ -701,7 +701,7 @@ where
                 let mut input = original_input.clone();
                 let bytes = input.bytes_mut();
                 // replace the target bytes with the mutated byte values
-                for (arr_idx, dest_pos) in target_bytes_pos.iter().enumerate() {
+                for (arr_idx, dest_pos) in target_bytes_pos.to_list().iter().enumerate() {
                     bytes[*dest_pos] = altered_bytes[arr_idx];
                 }
 
@@ -793,7 +793,7 @@ where
                 let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
                     continue;
                 };
-                if dependent_bytes.is_empty() {
+                if dependent_bytes.raw_ranges().is_empty() {
                     continue;
                 }
                 let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
@@ -805,7 +805,7 @@ where
                 if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
                     *bytes_power += power;
                 } else {
-                    power_for_mutation_target_bytes.insert(dependent_bytes.to_vec(), power);
+                    power_for_mutation_target_bytes.insert(dependent_bytes.clone(), power);
                 }
 
                 total_power += power;
@@ -833,7 +833,7 @@ where
             let mut mutated_input = original_input.clone();
             for mutation_num in 0..num_sub_mutations {
                 // select a set of dependent bytes to apply a mutation to
-                let bytes_for_mut_indexes: Vec<usize> = {
+                let bytes_for_mut_indexes: DependentBytes = {
                     let mut res = None;
                     let rand_val = state.rand_mut().below(total_power);
                     let mut running_total = 0;
@@ -858,8 +858,8 @@ where
                 }
 
                 // build a vec of the values of target bytes
-                let bytes_for_mut_vals: Vec<u8> = bytes_for_mut_indexes.iter()
-                    .map(|&idx| mutated_input.bytes()[idx])
+                let bytes_for_mut_vals: Vec<u8> = bytes_for_mut_indexes.to_list().into_iter()
+                    .map(|idx| mutated_input.bytes()[idx])
                     .collect();
 
                 let mut sub_input = BytesInput::new(bytes_for_mut_vals);
@@ -875,7 +875,7 @@ where
 
                 let bytes = mutated_input.bytes_mut();
                 // replace the target bytes with the mutated byte values
-                for (arr_idx, dest_pos) in bytes_for_mut_indexes.iter().enumerate() {
+                for (arr_idx, dest_pos) in bytes_for_mut_indexes.to_list().iter().enumerate() {
                     bytes[*dest_pos] = mutated_bytes[arr_idx];
                 }
             }
@@ -1012,21 +1012,21 @@ where
                 &required_edges,
             ).unwrap();
 
-            let mut mutations_tested_on_target_bytes: HashMap<Vec<usize>, usize> = HashMap::new();
-            let mut uncovered_bbs_depending_on_bytes: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
+            let mut mutations_tested_on_target_bytes: HashMap<DependentBytes, usize> = HashMap::new();
+            let mut uncovered_bbs_depending_on_bytes: HashMap<DependentBytes, HashSet<usize>> = HashMap::new();
             let mut bytes_depended_on_by_uncovered_bb = HashMap::new();
-            for (edge, bytes) in &bytes_depended_on_by_bb {
+            for (edge, dependent_bytes) in &bytes_depended_on_by_bb {
                 let uncovered_siblings = &siblings_for_covered_bb[edge];
                 for sib in uncovered_siblings {
-                    bytes_depended_on_by_uncovered_bb.insert(*sib, bytes.clone());
+                    bytes_depended_on_by_uncovered_bb.insert(*sib, dependent_bytes.clone());
                 }
-                if let Some(edges) = uncovered_bbs_depending_on_bytes.get_mut(bytes) {
+                if let Some(edges) = uncovered_bbs_depending_on_bytes.get_mut(dependent_bytes) {
                     for sib in uncovered_siblings { edges.insert(*sib); }
                 } else {
                     uncovered_bbs_depending_on_bytes.insert(
-                        bytes.to_owned(), HashSet::from_iter(uncovered_siblings.into_iter().cloned())
+                        dependent_bytes.clone(), HashSet::from_iter(uncovered_siblings.into_iter().cloned())
                     );
-                    mutations_tested_on_target_bytes.insert(bytes.to_owned(), 0);
+                    mutations_tested_on_target_bytes.insert(dependent_bytes.clone(), 0);
                 }
             }
 

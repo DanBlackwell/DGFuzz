@@ -443,43 +443,47 @@ impl I2SRandReplace
             cmp_meta.targeted_replacements.remove(chosen_rep)
         };
 
+        let current_vals = replacement.input_byte_values.to_owned();
         let mut swap_vec = replacement.replacement_byte_values.to_owned();
-        if swap_vec.len() <= 8 {
-            let rand = state.rand_mut().below(8);
-
-            // 75% chance to copy exact (handles ==, <= and >=), 
-            // 12.5% chance to +1 or -1 (to deal with !=, > or < comparisons)
-            if rand > 5 {
-                let mut num_val = if replacement.is_little_endian {
-                    // assume unsigned (sorry)
-                    let mut tmp = swap_vec.clone();
-                    while tmp.len() < 8 { tmp.push(0); }
-                    u64::from_le_bytes(tmp.try_into().unwrap())
-                } else {
-                    let mut tmp = swap_vec.clone();
-                    while tmp.len() < 8 { tmp.insert(0, 0); }
-                    u64::from_be_bytes(tmp.try_into().unwrap())
-                };
-
-                if rand == 6 {
-                    num_val += 1;
-                } else {
-                    num_val -= 1;
+        // These values are equal - but the branch is uncovered, so presumably it's a !=, > or <
+        if current_vals == swap_vec {
+            // increment or decrement
+            let inc = state.rand_mut().below(2) == 0;
+            for idx in 0..swap_vec.len() {
+                if inc && swap_vec[idx] != 255 {
+                    swap_vec[idx] += 1;
+                    break;
+                } else if !inc && swap_vec[idx] != 0 {
+                    swap_vec[idx] -= 1;
+                    break;
+                }
+            }
+        } else {
+            // if `test_equal` then copy the exact value, else swap > for <
+            let test_equal = state.rand_mut().below(2) == 0;
+            if !test_equal {
+                let mut greater = false;
+                for idx in 0..current_vals.len() {
+                    if current_vals[idx] != swap_vec[idx] {
+                        if current_vals[idx] > swap_vec[idx] {
+                            greater = true;
+                        }
+                        break;
+                    }
                 }
 
-                swap_vec = if replacement.is_little_endian {
-                    num_val.to_le_bytes()[0..swap_vec.len()].to_vec()
-                } else {
-                    num_val.to_be_bytes()[(8 - swap_vec.len())..].to_vec()
-                };
+                for idx in 0..current_vals.len() {
+                    if greater && swap_vec[idx] > 0 {
+                        // The current vals are > swap_vec, so alter the copied value to be < swap_vec
+                        swap_vec[idx] -= 1;
+                        break;
+                    } else if !greater && swap_vec[idx] < 255 {
+                        swap_vec[idx] += 1;
+                        break;
+                    }
+                }
             }
         }
-
-        // if swap_vec.len() > 2 {
-        //     println!("Swapping in {:?} in place of {:?} at positions {:?}", 
-        //         swap_vec, replacement.input_byte_values, 
-        //         replacement.input_byte_indexes);
-        // }
 
         // populate the input with the cmpval bytes
         let bytes = input.bytes_mut();
