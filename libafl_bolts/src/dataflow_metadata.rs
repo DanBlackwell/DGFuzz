@@ -4,11 +4,21 @@ use crate::Vec;
 use alloc::rc::Rc;
 use core::{borrow::Borrow, ops::Range};
 
+/// A wrapper for u32 indicating the Coverage map index for a basic block / instruction
+#[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
+pub struct CoverageMapIdx(pub u32);
+crate::impl_serdeany!(CoverageMapIdx);
+
+/// A wrapper for u64 indicating the uuid for a basic block
+#[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
+pub struct BasicBlockUUID(pub u32);
+crate::impl_serdeany!(BasicBlockUUID);
+
 #[derive(Clone,Debug,Serialize,Deserialize)]
 /// Fuzzer (global) level metadata for DFSan stage
 pub struct FuzzerDataflowMetadata {
     /// Number of mutations tested for a given target edge (neighbour)
-    pub num_mutations_for_edge: HashMap<usize, usize>,
+    pub num_mutations_for_edge: HashMap<CoverageMapIdx, usize>,
 }
 
 crate::impl_serdeany!(FuzzerDataflowMetadata);
@@ -17,12 +27,12 @@ crate::impl_serdeany!(FuzzerDataflowMetadata);
 /// Metadata indicating the direct neighbours for each edge (for a given testcase)
 /// We need this because of indirect function calls not being resolvable otherwise
 pub struct TestcaseDirectNeighboursMetadata {
-    /// Map from a covered edge to the list of all siblings not covered by with input
-    pub locally_uncovered_siblings_for_covered_bb: HashMap<usize, Vec<usize>>,
-    /// Map from a covered edge to the list of all siblings not covered by any corpus entry
-    pub globally_uncovered_siblings_for_covered_bb: HashMap<usize, Vec<usize>>,
+    /// Set of `CoverageMapIdx` containing all uncovered bbs (by this input) that have covered siblings
+    pub locally_uncovered_bbs_that_have_covered_siblings: HashSet<CoverageMapIdx>,
+    /// Set of `CoverageMapIdx` containing all covered bbs that have uncovered siblings (by this input)
+    pub covered_bbs_that_have_locally_uncovered_siblings: HashSet<CoverageMapIdx>,
     /// Map from uncovered bb coverage map index to parent coverage map index
-    pub parent_for_uncovered_bb: HashMap<usize, usize>,
+    pub parent_for_uncovered_bb: HashMap<CoverageMapIdx, CoverageMapIdx>,
 }
 
 crate::impl_serdeany!(TestcaseDirectNeighboursMetadata);
@@ -78,12 +88,10 @@ impl DependentBytes {
 #[derive(Clone,Debug,Serialize,Deserialize)]
 /// Testcase level metadata for DFSan stage
 pub struct TestcaseDataflowMetadata {
-    /// Map from bb coverage map index to bytes that the conditional afterwards depends on
-    pub bytes_depended_on_by_uncovered_bb: HashMap<usize, DependentBytes>,
     /// number of mutations applied to target bytes
     pub mutations_tested_on_target_bytes: HashMap<DependentBytes, usize>,
     /// set of bb coverage map indexes that depend on a certain set of bytes
-    pub uncovered_bbs_depending_on_bytes: HashMap<DependentBytes, HashSet<usize>>,
+    pub uncovered_bbs_depending_on_bytes: HashMap<DependentBytes, HashSet<CoverageMapIdx>>,
 }
 
 crate::impl_serdeany!(TestcaseDataflowMetadata);

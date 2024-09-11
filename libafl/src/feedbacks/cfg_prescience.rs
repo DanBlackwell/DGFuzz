@@ -3,18 +3,8 @@
 use alloc::{borrow::ToOwned, collections::VecDeque, string::{String, ToString}, vec::Vec};
 use hashbrown::{HashMap, HashSet};
 
-use libafl_bolts::dataflow_metadata::TestcaseDirectNeighboursMetadata;
+use libafl_bolts::dataflow_metadata::{CoverageMapIdx, BasicBlockUUID, TestcaseDirectNeighboursMetadata};
 use serde::{Deserialize, Serialize};
-
-/// A wrapper for u32 indicating the Coverage map index for a basic block / instruction
-#[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
-pub struct CoverageMapIdx(pub u32);
-libafl_bolts::impl_serdeany!(CoverageMapIdx);
-
-/// A wrapper for u64 indicating the uuid for a basic block
-#[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
-pub struct BasicBlockUUID(pub u32);
-libafl_bolts::impl_serdeany!(BasicBlockUUID);
 
 
 /// Struct containing the details of a reachable CFG node (coverage map index)
@@ -900,8 +890,8 @@ impl ControlFlowGraph {
         covered_indexes: &[usize],
         all_coverage_map_indexes: &HashSet<usize>,
     ) -> TestcaseDirectNeighboursMetadata {
-        let mut locally_uncovered_siblings_for_covered_bb = HashMap::new();
-        let mut globally_uncovered_siblings_for_covered_bb = HashMap::new();
+        let mut locally_uncovered_bbs_that_have_covered_siblings = HashSet::new();
+        let mut covered_bbs_that_have_locally_uncovered_siblings = HashSet::new();
         let mut parent_for_uncovered_bb = HashMap::new();
         let locally_covered_set: HashSet<usize> = covered_indexes
             .into_iter().copied().collect();
@@ -909,47 +899,67 @@ impl ControlFlowGraph {
         for idx in covered_indexes {
             let bb = &self.all_edges[*idx];
             let mut covered_succs = vec![];
-            let mut locally_uncovered_succs = vec![];
-            let mut globally_uncovered_succs = vec![];
+            let mut locally_uncovered_succs = HashSet::new();
             for succ_uuid in &bb.successor_uuids {
                 let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid]]
                     .coverage_map_idx else { continue; };
                 let succ_idx = succ_cov_map_idx.0 as usize;
-                if !all_coverage_map_indexes.contains(&succ_idx) {
-                    globally_uncovered_succs.push(succ_idx);
-                } 
                 if !locally_covered_set.contains(&succ_idx) {
-                    locally_uncovered_succs.push(succ_idx);
+                    locally_uncovered_succs.insert(CoverageMapIdx(succ_idx as u32));
                 } else {
-                    covered_succs.push(succ_idx);
+                    covered_succs.push(CoverageMapIdx(succ_idx as u32));
                 }
             }
 
-            if !globally_uncovered_succs.is_empty() {
-                for covered_succ in &covered_succs {
-                    globally_uncovered_siblings_for_covered_bb.insert(
-                        *covered_succ, globally_uncovered_succs.clone()
-                    );
+            if !locally_uncovered_succs.is_empty() && !covered_succs.is_empty() {
+                for locally_uncovered in locally_uncovered_succs.clone() {
+                    locally_uncovered_bbs_that_have_covered_siblings.insert(locally_uncovered);
                 }
+                for covered in covered_succs {
+                    covered_bbs_that_have_locally_uncovered_siblings.insert(covered);
+                }
+            }
 
-                if !locally_uncovered_succs.is_empty() {
-                    for covered_succ in covered_succs {
-                        locally_uncovered_siblings_for_covered_bb.insert(
-                            covered_succ, locally_uncovered_succs.clone()
-                        );
-                    }
-                }
-
-                for uncovered_succ in locally_uncovered_succs {
-                    parent_for_uncovered_bb.insert(uncovered_succ, *idx);
-                }
+            for uncovered_succ in locally_uncovered_succs {
+                parent_for_uncovered_bb.insert(uncovered_succ, CoverageMapIdx(*idx as u32));
             }
         }
 
         TestcaseDirectNeighboursMetadata { 
-            locally_uncovered_siblings_for_covered_bb,
-            globally_uncovered_siblings_for_covered_bb, 
+            locally_uncovered_bbs_that_have_covered_siblings,
+            covered_bbs_that_have_locally_uncovered_siblings,
             parent_for_uncovered_bb 
         }
+    }
+
+    pub fn uncovered_siblings_for_bb(
+        &self,
+        covered_indexes: &[usize],
+        sought_bb: CoverageMapIdx,
+    ) -> HashSet<CoverageMapIdx> {
+        // TODO: should pass in a hashmap rather than &[usize] everytime...
+        let locally_covered_set: HashSet<CoverageMapIdx> = covered_indexes
+            .into_iter().map(|x| CoverageMapIdx(*x as u32)).collect();
+
+        for idx in covered_indexes {
+            let bb = &self.all_edges[*idx];
+            let mut locally_uncovered_succs = HashSet::new();
+            let mut found = false;
+            for succ_uuid in &bb.successor_uuids {
+                let Some(succ_cov_map_idx) = self.all_edges[self.edge_with_uuid[succ_uuid]]
+                    .coverage_map_idx else { continue; };
+                if !locally_covered_set.contains(&succ_cov_map_idx) {
+                    locally_uncovered_succs.insert(succ_cov_map_idx);
+                } else if succ_cov_map_idx == sought_bb {
+                    found = true;
+                }
+            }
+
+            if found {
+                return locally_uncovered_succs;
+            }
+        }
+
+        HashSet::new()
     }
 }

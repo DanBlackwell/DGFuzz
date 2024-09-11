@@ -9,7 +9,7 @@ use std::path::PathBuf;
 // use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
     dataflow_metadata::{
-        FuzzerDataflowMetadata, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata, DependentBytes
+        CoverageMapIdx, FuzzerDataflowMetadata, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata, DependentBytes
     },
     ownedref::OwnedMutSlice,
     rands::Rand,
@@ -28,7 +28,7 @@ use libafl::{
         BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator,
         DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator,
         WordAddMutator, WordInterestingMutator,
-    }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{cfg_prescience::CoverageMapIdx, DiscoveriesMutationTypeMetadata, DiscoveryMutationType}, stages::{
+    }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{DiscoveriesMutationTypeMetadata, DiscoveryMutationType}, stages::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
     }, start_timer, state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState}, Error, Evaluator, ExecuteInputResult, HasObjective
@@ -435,7 +435,7 @@ where
             let tc = state.corpus().get(idx).unwrap().borrow();
             let df_meta = tc.metadata::<TestcaseDataflowMetadata>().unwrap();
             let mut res = HashSet::new();
-            for (_edge, byte_dependencies) in &df_meta.bytes_depended_on_by_uncovered_bb {
+            for (byte_dependencies, _bbs) in &df_meta.uncovered_bbs_depending_on_bytes {
                 for idx in byte_dependencies.to_list() {
                     res.insert(idx);
                 }
@@ -513,38 +513,27 @@ where
             let tc = state.corpus().get(corpus_idx).unwrap().borrow();
             tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
         };
-        let siblings_for_covered_bb = {
-            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
-            tc.metadata::<TestcaseDirectNeighboursMetadata>()
-                .unwrap()
-                .locally_uncovered_siblings_for_covered_bb
-                .clone()
-        };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
         let mut power_for_mutation_target_bytes = HashMap::new();
         let mut total_muts = 0usize;
         let mut max_power = 0usize;
 
-        // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (current, siblings) in &siblings_for_covered_bb {
-            for sibling in siblings {
-                let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
-                    continue;
-                };
-                if dependent_bytes.raw_ranges().is_empty() {
-                    continue;
-                }
-                let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
-                // if we've already tested every possible value for this edge...
-                if dependent_bytes.raw_ranges().len() == 1 && 
-                    dependent_bytes.raw_ranges()[0].clone().count() == 1 && 
-                    muts >= 256 {
-                    continue;
-                }
+        for (dependent_bytes, uncovered_bbs) in &tc_meta_copy.uncovered_bbs_depending_on_bytes {
+            if dependent_bytes.raw_ranges().is_empty() {
+                continue;
+            }
+            let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+            // if we've already tested every possible value for this edge...
+            if dependent_bytes.raw_ranges().len() == 1 && 
+                dependent_bytes.raw_ranges()[0].clone().count() == 1 && 
+                muts >= 256 {
+                continue;
+            }
 
-                let mut power = 0;
-                let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
+            let mut power = 0;
+            for uncovered_bb in uncovered_bbs {
+                let muts = df_meta.num_mutations_for_edge.get(uncovered_bb).unwrap();
                 power += muts;
 
                 if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
@@ -558,9 +547,9 @@ where
                         max_power = power;
                     }
                 }
-
-                total_muts += power;
             }
+
+            total_muts += power;
         }
 
         // Calculate how much to mutate the bytes for each target edge
@@ -646,7 +635,7 @@ where
                     .unwrap()
                     .covered_blocks;
                 for cov_idx in tc_meta_copy.uncovered_bbs_depending_on_bytes.get(target_bytes_pos).unwrap() {
-                    if !covered.contains(cov_idx) {
+                    if !covered.contains(&(cov_idx.0 as usize)) {
                         res = true;
                         break;
                     }
@@ -775,31 +764,26 @@ where
             let tc = state.corpus().get(corpus_idx).unwrap().borrow();
             tc.metadata::<TestcaseDataflowMetadata>().unwrap().clone()
         };
-        let siblings_for_covered_bb = {
-            let tc = state.corpus().get(corpus_idx).unwrap().borrow();
-            tc.metadata::<TestcaseDirectNeighboursMetadata>()
-                .unwrap()
-                .locally_uncovered_siblings_for_covered_bb
-                .clone()
-        };
         let df_meta = state.metadata::<FuzzerDataflowMetadata>().unwrap();
 
         let mut power_for_mutation_target_bytes = HashMap::new();
         let mut total_power = 0usize;
 
-        // recalc which edges we've found corpus entries for (so we don't waste time mutating bytes we don't need to)
-        for (current, siblings) in &siblings_for_covered_bb {
-            for sibling in siblings {
-                let Some(dependent_bytes) = tc_meta_copy.bytes_depended_on_by_uncovered_bb.get(sibling) else {
-                    continue;
-                };
-                if dependent_bytes.raw_ranges().is_empty() {
-                    continue;
-                }
-                let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+        for (dependent_bytes, uncovered_bbs) in &tc_meta_copy.uncovered_bbs_depending_on_bytes {
+            if dependent_bytes.raw_ranges().is_empty() {
+                continue;
+            }
+            let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
+            // if we've already tested every possible value for this edge...
+            if dependent_bytes.raw_ranges().len() == 1 && 
+                dependent_bytes.raw_ranges()[0].clone().count() == 1 && 
+                muts >= 256 {
+                continue;
+            }
 
-                let mut power = 0;
-                let muts = df_meta.num_mutations_for_edge.get(sibling).unwrap();
+            let mut power = 0;
+            for uncovered_bb in uncovered_bbs {
+                let muts = df_meta.num_mutations_for_edge.get(uncovered_bb).unwrap();
                 power += muts;
 
                 if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
@@ -807,9 +791,9 @@ where
                 } else {
                     power_for_mutation_target_bytes.insert(dependent_bytes.clone(), power);
                 }
-
-                total_power += power;
             }
+
+            total_power += power;
         }
 
         let mut mutations_for_target_bytes = HashMap::new();
@@ -998,14 +982,17 @@ where
 
             let start = std::time::Instant::now();
 
-            let siblings_for_covered_bb: HashMap<usize, Vec<usize>> = tc
+            let covered_bbs_with_sibs: Vec<usize> = tc
                 .metadata_mut::<TestcaseDirectNeighboursMetadata>()
                 .unwrap()
-                .locally_uncovered_siblings_for_covered_bb
-                .clone();
+                .covered_bbs_that_have_locally_uncovered_siblings
+                .clone()
+                .into_iter()
+                .map(|bb| bb.0 as usize)
+                .collect();
             drop(tc);
 
-            let required_edges: Vec<usize> = siblings_for_covered_bb.keys().copied().collect();
+            let required_edges: Vec<usize> = covered_bbs_with_sibs;
             let bytes_depended_on_by_bb = self.get_bytes_depended_on_by_edges(
                 fuzzer,
                 executor,
@@ -1014,47 +1001,52 @@ where
                 &required_edges,
             ).unwrap();
 
+            let tc = state.corpus().get(idx).unwrap().borrow();
+            let covered = &tc.metadata::<MapIndexesMetadata>().unwrap().list;
+            let cfg_meta = state.metadata::<ControlFlowGraph>().unwrap();
+
             let mut mutations_tested_on_target_bytes: HashMap<DependentBytes, usize> = HashMap::new();
-            let mut uncovered_bbs_depending_on_bytes: HashMap<DependentBytes, HashSet<usize>> = HashMap::new();
-            let mut bytes_depended_on_by_uncovered_bb = HashMap::new();
+            let mut uncovered_bbs_depending_on_bytes: HashMap<DependentBytes, HashSet<CoverageMapIdx>> = HashMap::new();
+            let mut siblings_for_covered_bb = HashMap::new();
             for (edge, dependent_bytes) in &bytes_depended_on_by_bb {
-                let uncovered_siblings = &siblings_for_covered_bb[edge];
-                for sib in uncovered_siblings {
-                    bytes_depended_on_by_uncovered_bb.insert(*sib, dependent_bytes.clone());
-                }
+                let uncovered_siblings = cfg_meta.uncovered_siblings_for_bb(covered, CoverageMapIdx(*edge as u32));
+                siblings_for_covered_bb.insert(edge, uncovered_siblings.clone());
+
                 if let Some(edges) = uncovered_bbs_depending_on_bytes.get_mut(dependent_bytes) {
-                    for sib in uncovered_siblings { edges.insert(*sib); }
+                    for sib in uncovered_siblings { edges.insert(CoverageMapIdx(sib.0 as u32)); }
                 } else {
                     uncovered_bbs_depending_on_bytes.insert(
-                        dependent_bytes.clone(), HashSet::from_iter(uncovered_siblings.into_iter().cloned())
+                        dependent_bytes.clone(), HashSet::from_iter(uncovered_siblings.iter().cloned())
                     );
                     mutations_tested_on_target_bytes.insert(dependent_bytes.clone(), 0);
                 }
             }
 
+            drop(tc);
 
             let meta = TestcaseDataflowMetadata {
-                bytes_depended_on_by_uncovered_bb,
                 mutations_tested_on_target_bytes,
                 uncovered_bbs_depending_on_bytes,
             };
-            let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
-            tc.add_metadata(meta);
-            drop(tc);
+            state.corpus().get(idx).unwrap().borrow_mut().add_metadata(meta);
 
             // TODO: We should really keep track of the parents rather than siblings
             //       as there can be many siblings for one parent (eg switch statements)
 
             // Add any new neighbours to the effort tracker
+            let uncovered_bbs_with_covered_sibs = {
+                let tc = state.corpus().get(idx).unwrap().borrow();
+                tc.metadata::<TestcaseDirectNeighboursMetadata>()
+                    .unwrap()
+                    .locally_uncovered_bbs_that_have_covered_siblings
+                    .clone()
+            };
             let global_meta = state.metadata_mut::<FuzzerDataflowMetadata>().unwrap();
-            for siblings in siblings_for_covered_bb.values() {
-                for sibling in siblings {
-                    if global_meta.num_mutations_for_edge.get(sibling).is_none() {
-                        global_meta.num_mutations_for_edge.insert(*sibling, 0);
-                    }
+            for bb in uncovered_bbs_with_covered_sibs {
+                if global_meta.num_mutations_for_edge.get(&bb).is_none() {
+                    global_meta.num_mutations_for_edge.insert(bb, 0);
                 }
             }
-
         } else {
             drop(tc);
         }
