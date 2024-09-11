@@ -100,6 +100,21 @@ pub struct TargetedCmpValReplace {
 }
 
 /// A state metadata holding a list of values logged from comparisons
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
+#[cfg_attr(
+    any(not(feature = "serdeany_autoreg"), miri),
+    allow(clippy::unsafe_derive_deserialize)
+)] // for SerdeAny
+pub struct AnyCmpValReplace {
+    /// The index that this replacement begins at
+    #[serde(skip)]
+    pub start_idx: usize,
+    /// Vec containing the new bytes (to be swapped in)
+    #[serde(skip)]
+    pub new_bytes: Vec<u8>,
+}
+
+/// A state metadata holding a list of values logged from comparisons
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
@@ -115,6 +130,9 @@ pub struct CmpValuesMetadata {
     /// A `list` of possible DFSan targeted replacements
     #[serde(skip)]
     pub targeted_replacements: Vec<TargetedCmpValReplace>,
+    /// A `list` of all possible replacements
+    #[serde(skip)]
+    pub all_replacements: Vec<AnyCmpValReplace>,
 }
 
 libafl_bolts::impl_serdeany!(CmpValuesMetadata);
@@ -136,7 +154,84 @@ impl CmpValuesMetadata {
     /// Creates a new [`struct@CmpValuesMetadata`]
     #[must_use]
     pub fn new() -> Self {
-        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![] }
+        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![], all_replacements: vec![] }
+    }
+
+    fn populate_all_replacements<S>(&mut self, state: &S)
+    where
+        S: HasMetadata + HasCorpus,
+        S::Input: HasMutatorBytes,
+    {
+        let mut replacements = HashSet::new();
+
+        let curr_idx = state.corpus().current().unwrap();
+        let tc = state.corpus().get(curr_idx).unwrap().borrow();
+        let input = tc.input().as_ref().unwrap().to_owned();
+
+        for cmp_values in &self.list {
+            // convert to vecs
+            let (mut cmp1, mut cmp2) = match cmp_values {
+                // makes no sense to strip u8 or u16s
+                CmpValues::U8(v) => (vec![v.0], vec![v.1]),
+                CmpValues::U16(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
+            };
+
+            // strip leading and trailing zeroes
+            let mut start = 0;
+            for idx in 0..cmp1.len() {
+                start = idx;
+                if cmp1[idx] != 0 || cmp1[idx] != cmp2[idx] {
+                    break;
+                }
+            }
+            let mut end = cmp1.len();
+            loop {
+                if cmp1[end - 1] != 0 || cmp1[end - 1] != cmp2[end - 1] {
+                    break;
+                }
+                if end == 1 { break; } else { end -= 1; }
+            }
+
+            if start < end {
+                cmp1 = cmp1[start..end].to_vec();
+                cmp2 = cmp2[start..end].to_vec();
+            } else {
+                // Both sides of the cmplog were all zeroes...
+                continue;
+            }
+
+            let len = input.bytes().len();
+            let bytes = &input.bytes();
+
+            // collect up matches for cmpval side 1
+            memmem::find_iter(&bytes, &cmp1).for_each(|start_idx| { 
+                replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp2.clone() }); 
+            });
+            // if it's a palindrome we'll match it either direction
+            let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+            let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
+            if cmp1 != rev1 {
+                memmem::find_iter(&bytes, &rev1).for_each(|start_idx| { 
+                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev2.clone() }); 
+                });
+            }
+
+            // collect up matches for cmpval side 2
+            memmem::find_iter(&bytes, &cmp2).for_each(|start_idx| { 
+                replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp1.clone() }); 
+            });
+            // if it's a palindrome we'll match it either direction
+            if cmp2 != rev2 {
+                memmem::find_iter(&bytes, &rev2).for_each(|start_idx| { 
+                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev1.clone() }); 
+                });
+            }
+        }
+
+        self.all_replacements = replacements.into_iter().collect();
     }
 
     fn populate_targeted_replacements<S>(&mut self, state: &S)
@@ -289,6 +384,7 @@ where
     {
         self.list.clear();
         self.map.clear();
+        self.all_replacements.clear();
         self.targeted_replacements.clear();
         let count = usable_count;
         for i in 0..count {
@@ -351,6 +447,7 @@ where
             }
         }
 
+        self.populate_all_replacements(state);
         self.populate_targeted_replacements(state);
     }
 }

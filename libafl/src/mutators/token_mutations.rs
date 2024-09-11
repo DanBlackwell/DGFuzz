@@ -525,100 +525,22 @@ where
             }
         }
 
-        let cmps_len = {
-            let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
-                return Ok(MutationResult::Skipped);
-            };
-            log::trace!("meta: {:x?}", meta);
-            if meta.list.is_empty() {
+        let num_replacements = {
+            let meta = state.metadata::<CmpValuesMetadata>().unwrap();
+            if meta.all_replacements.is_empty() {
                 return Ok(MutationResult::Skipped);
             }
-            meta.list.len()
+            meta.all_replacements.len()
         };
-        let idx = state.rand_mut().below(cmps_len);
 
+        let rep_idx = state.rand_mut().below(num_replacements);
         let meta = state.metadata::<CmpValuesMetadata>().unwrap();
-        let cmp_values = &meta.list[idx];
-
-        // convert to vecs
-        let (mut cmp1, mut cmp2) = match cmp_values {
-            // makes no sense to strip u8 or u16s
-            CmpValues::U8(v) => (vec![v.0], vec![v.1]),
-            CmpValues::U16(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-            CmpValues::U32(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-            CmpValues::U64(v) => (v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-            CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
-        };
-
-        // strip leading and trailing zeroes
-        let mut start = 0;
-        for idx in 0..cmp1.len() {
-            start = idx;
-            if cmp1[idx] != 0 || cmp1[idx] != cmp2[idx] {
-                break;
-            }
-        }
-        let mut end = cmp1.len();
-        loop {
-            if cmp1[end - 1] != 0 || cmp1[end - 1] != cmp2[end - 1] {
-                break;
-            }
-            if end == 1 { break; } else { end -= 1; }
-        }
-
-        if start < end {
-            cmp1 = cmp1[start..end].to_vec();
-            cmp2 = cmp2[start..end].to_vec();
-        } else {
-            // Both sides of the cmplog were all zeroes...
-            return Ok(MutationResult::Skipped);
-        }
-
-        let off = if cmp1.len() == size {
-            0
-        } else if cmp1.len() < size {
-            state.rand_mut().below(size - cmp1.len())
-        } else {
-            return Ok(MutationResult::Skipped);
-        };
-
-        let len = input.bytes().len();
-        let bytes = &input.bytes()[off..];
-
-        let mut replacements: HashSet<(usize, Vec<u8>)> = HashSet::new();
-
-        let mut end_idx = bytes.len();
-        let mut replacement = None;
-        if let Some(idx) = memmem::Finder::new(&cmp1).find(&bytes[..end_idx]) {
-            replacement = Some((idx, cmp2.clone()));
-            end_idx = idx + cmp1.len();
-        }
-
-        let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-        let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-        if let Some(idx) = memmem::Finder::new(&rev1).find(&bytes[..end_idx]) {
-            replacement = Some((idx, rev2.clone()));
-            end_idx = idx + cmp1.len();
-        }
-
-        if let Some(idx) = memmem::Finder::new(&cmp2).find(&bytes[..end_idx]) {
-            replacement = Some((idx, cmp1.clone()));
-            end_idx = idx + cmp1.len();
-        }
-
-        if let Some(idx) = memmem::Finder::new(&rev2).find(&bytes[..end_idx]) {
-            replacement = Some((idx, rev1));
-            end_idx = idx + cmp1.len();
-        }
-
-        let Some((start_idx, replacement_bytes)) = replacement else {
-            return Ok(MutationResult::Skipped);
-        };
+        let replacement = &meta.all_replacements[rep_idx];
 
         let bytes = input.bytes_mut();
         // I presume the compiler can figure out this is memcpy...
-        for idx in 0..replacement_bytes.len() {
-            bytes[off + start_idx + idx] = replacement_bytes[idx];
+        for idx in 0..replacement.new_bytes.len() {
+            bytes[replacement.start_idx + idx] = replacement.new_bytes[idx];
         }
 
         Ok(MutationResult::Mutated)
