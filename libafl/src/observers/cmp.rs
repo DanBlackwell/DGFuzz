@@ -224,50 +224,53 @@ impl CmpValuesMetadata {
                     // populate a complete list of matches for this cmpval in this edges dependent bytes
                     for (is_num, cmp1, cmp2) in trimmed_cmps.clone() {
                         // skip boring replacements
-                        if cmp1.len() < 1 || byte_vals.len() < cmp1.len() { continue; }
+                        if cmp1.len() < 1 { continue; }
 
-                        // collect up matches for cmpval side 1
-                        memmem::find_iter(&byte_vals, &cmp1)
-                            .map(|idx| TargetedCmpValReplace {
-                                input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
-                                input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                replacement_byte_values: cmp2.clone(),
-                                is_little_endian: false
-                            })
-                            .for_each(|v| { all_replacements.insert(v); });
-                        // if it's a palindrome we'll match it either direction
-                        let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-                        let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-                        if is_num && cmp1 != rev1 {
-                            memmem::find_iter(&byte_vals, &rev1)
+                        if cmp1.len() <= byte_vals.len() {
+                            // collect up matches for cmpval side 1
+                            memmem::find_iter(&byte_vals, &cmp1)
                                 .map(|idx| TargetedCmpValReplace {
                                     input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
                                     input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                    replacement_byte_values: rev2.clone(),
-                                    is_little_endian: true
+                                    replacement_byte_values: cmp2.clone(),
+                                    is_little_endian: false
                                 })
                                 .for_each(|v| { all_replacements.insert(v); });
-                        }
 
-                        // collect up matches for cmpval side 2
-                        memmem::find_iter(&byte_vals, &cmp2)
-                            .map(|idx| TargetedCmpValReplace {
-                                input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
-                                input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                replacement_byte_values: cmp1.clone(),
-                                is_little_endian: false
-                            })
-                            .for_each(|v| { all_replacements.insert(v); });
-                        // if it's a palindrome we'll match it either direction
-                        if is_num && cmp2 != rev2 {
-                            memmem::find_iter(&byte_vals, &rev2)
+                            let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+                            let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
+                            // if it's a palindrome we'll have duplicate matches in either direction
+                            if is_num && cmp1 != rev1 {
+                                memmem::find_iter(&byte_vals, &rev1)
+                                    .map(|idx| TargetedCmpValReplace {
+                                        input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
+                                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                        replacement_byte_values: rev2.clone(),
+                                        is_little_endian: true
+                                    })
+                                    .for_each(|v| { all_replacements.insert(v); });
+                            }
+
+                            // collect up matches for cmpval side 2
+                            memmem::find_iter(&byte_vals, &cmp2)
                                 .map(|idx| TargetedCmpValReplace {
                                     input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
                                     input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                    replacement_byte_values: rev1.clone(),
-                                    is_little_endian: true
+                                    replacement_byte_values: cmp1.clone(),
+                                    is_little_endian: false
                                 })
                                 .for_each(|v| { all_replacements.insert(v); });
+                            // if it's a palindrome we'll have duplicate matches in either direction
+                            if is_num && cmp2 != rev2 {
+                                memmem::find_iter(&byte_vals, &rev2)
+                                    .map(|idx| TargetedCmpValReplace {
+                                        input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
+                                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                        replacement_byte_values: rev1.clone(),
+                                        is_little_endian: true
+                                    })
+                                    .for_each(|v| { all_replacements.insert(v); });
+                            }
                         }
 
                         if !is_num {

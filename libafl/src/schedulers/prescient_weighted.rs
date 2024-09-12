@@ -347,7 +347,8 @@ where
         let pick_random = state.rand_mut().below(8) == 0;
         let rand_idx = {
             let corp = state.corpus().count();
-            CorpusId::from(state.rand_mut().below(corp))
+            let idx = state.rand_mut().below(corp);
+            state.corpus().nth(idx)
         };
         let rand_prob: f64 = state.rand_mut().next_float();
 
