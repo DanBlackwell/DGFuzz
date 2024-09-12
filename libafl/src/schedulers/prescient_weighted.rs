@@ -335,9 +335,12 @@ where
             return Err(Error::empty(String::from("No entries in corpus")));
         }
 
-        let pick_random = state.rand_mut().below(5) == 0;
-        const MAX_RAND: u64 = 1_000_000;
-        let rand_prob: f64 = (state.rand_mut().below(MAX_RAND as usize) as f64) / MAX_RAND as f64;
+        let pick_random = state.rand_mut().below(10) == 0;
+        let rand_idx = {
+            let corp = state.corpus().count();
+            CorpusId::from(state.rand_mut().below(corp))
+        };
+        let rand_prob: f64 = state.rand_mut().next_float();
 
         let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
         if meta.needs_recalc {
@@ -362,7 +365,7 @@ where
 
         let selected_index = if pick_random {
             // Keep some diversity by occasionally selecting completely randomly
-            CorpusId::from((rand_prob as usize) % state.corpus().count())
+            rand_idx
         } else {
             let meta = state.metadata_map().get::<ProbabilityMetadata>().unwrap();
             let threshold = meta.total_probability * rand_prob;
