@@ -100,24 +100,6 @@ pub struct TargetedCmpValReplace {
 }
 
 /// A state metadata holding a list of values logged from comparisons
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
-#[cfg_attr(
-    any(not(feature = "serdeany_autoreg"), miri),
-    allow(clippy::unsafe_derive_deserialize)
-)] // for SerdeAny
-pub struct AnyCmpValReplace {
-    /// The index that this replacement begins at
-    #[serde(skip)]
-    pub start_idx: usize,
-    /// Vec containing the current bytes (to be swapped out)
-    #[serde(skip)]
-    pub existing_bytes: Vec<u8>,
-    /// Vec containing the new bytes (to be swapped in)
-    #[serde(skip)]
-    pub new_bytes: Vec<u8>,
-}
-
-/// A state metadata holding a list of values logged from comparisons
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 #[cfg_attr(
     any(not(feature = "serdeany_autoreg"), miri),
@@ -133,9 +115,6 @@ pub struct CmpValuesMetadata {
     /// A `list` of possible DFSan targeted replacements
     #[serde(skip)]
     pub targeted_replacements: Vec<TargetedCmpValReplace>,
-    /// A `list` of all possible replacements
-    #[serde(skip)]
-    pub all_replacements: Vec<AnyCmpValReplace>,
 }
 
 libafl_bolts::impl_serdeany!(CmpValuesMetadata);
@@ -157,108 +136,7 @@ impl CmpValuesMetadata {
     /// Creates a new [`struct@CmpValuesMetadata`]
     #[must_use]
     pub fn new() -> Self {
-        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![], all_replacements: vec![] }
-    }
-
-    fn populate_all_replacements<S>(&mut self, state: &S)
-    where
-        S: HasMetadata + HasCorpus,
-        S::Input: HasMutatorBytes,
-    {
-        let mut replacements = HashSet::new();
-
-        let curr_idx = state.corpus().current().unwrap();
-        let tc = state.corpus().get(curr_idx).unwrap().borrow();
-        let input = tc.input().as_ref().unwrap().to_owned();
-
-        for cmp_values in &self.list {
-            // convert to vecs
-            let (max_trim, mut cmp1, mut cmp2) = match cmp_values {
-                // makes no sense to strip u8 or u16s
-                CmpValues::U8(v)    => (0, vec![v.0], vec![v.1]),
-                CmpValues::U16(v)   => (0, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                // maybe a 24-bit int stuffed into a 32-bit
-                CmpValues::U32(v)   => (1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                // maybe a 40-56-bit int stuffed into a 64-bit
-                CmpValues::U64(v)   => (3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                CmpValues::Bytes(v) => (0, v.0.to_owned(), v.1.to_owned())
-            };
-
-            // count how many leading or trailing zeroes
-            let mut start = 0;
-            for idx in 0..cmp1.len() {
-                start = idx;
-                if cmp1[idx] != 0 || cmp1[idx] != cmp2[idx] {
-                    break;
-                }
-            }
-            let mut end = cmp1.len();
-            loop {
-                if cmp1[end - 1] != 0 || cmp1[end - 1] != cmp2[end - 1] {
-                    break;
-                }
-                if end == 1 { break; } else { end -= 1; }
-            }
-
-            let mut trimmed_cmps = vec![];
-            if start > max_trim {
-                start = max_trim;
-            }
-            trimmed_cmps.push((cmp1[start..].to_vec(), cmp2[start..].to_vec()));
-            if max_trim > 0 && cmp1.len() - end > 0 {
-                if cmp1.len() - end > max_trim {
-                    end = cmp1.len() - max_trim;
-                }
-                trimmed_cmps.push((cmp1[..end].to_vec(), cmp2[..end].to_vec()));
-            }
-
-            let len = input.bytes().len();
-            let bytes = &input.bytes();
-
-            for (cmp1, cmp2) in trimmed_cmps {
-                // collect up matches for cmpval side 1
-                memmem::find_iter(&bytes, &cmp1).for_each(|start_idx| { 
-                    replacements.insert(AnyCmpValReplace { 
-                        start_idx, 
-                        existing_bytes: cmp1.clone(),
-                        new_bytes: cmp2.clone() 
-                    }); 
-                });
-                // if it's a palindrome we'll match it either direction
-                let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-                let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-                if cmp1 != rev1 {
-                    memmem::find_iter(&bytes, &rev1).for_each(|start_idx| { 
-                        replacements.insert(AnyCmpValReplace { 
-                            start_idx, 
-                            existing_bytes: rev1.clone(),
-                            new_bytes: rev2.clone() 
-                        }); 
-                    });
-                }
-
-                // collect up matches for cmpval side 2
-                memmem::find_iter(&bytes, &cmp2).for_each(|start_idx| { 
-                    replacements.insert(AnyCmpValReplace { 
-                        start_idx, 
-                        existing_bytes: cmp2.clone(),
-                        new_bytes: cmp1.clone() 
-                    }); 
-                });
-                // if it's a palindrome we'll match it either direction
-                if cmp2 != rev2 {
-                    memmem::find_iter(&bytes, &rev2).for_each(|start_idx| { 
-                        replacements.insert(AnyCmpValReplace { 
-                            start_idx, 
-                            existing_bytes: rev2.clone(),
-                            new_bytes: rev1.clone() 
-                        }); 
-                    });
-                }
-            }
-        }
-
-        self.all_replacements = replacements.into_iter().collect();
+        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![] }
     }
 
     fn populate_targeted_replacements<S>(&mut self, state: &S)
@@ -304,7 +182,7 @@ impl CmpValuesMetadata {
                         CmpValues::U32(v)   => (1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
                         // maybe a 40-56-bit int stuffed into a 64-bit
                         CmpValues::U64(v)   => (3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                        CmpValues::Bytes(v) => (0, v.0.to_owned(), v.1.to_owned())
+                        CmpValues::Bytes(v) => (v.0.len(), v.0.to_owned(), v.1.to_owned())
                     };
 
                     // strip leading and trailing zeroes
@@ -417,7 +295,6 @@ where
     {
         self.list.clear();
         self.map.clear();
-        self.all_replacements.clear();
         self.targeted_replacements.clear();
         let count = usable_count;
         for i in 0..count {
@@ -480,7 +357,6 @@ where
             }
         }
 
-        self.populate_all_replacements(state);
         self.populate_targeted_replacements(state);
     }
 }

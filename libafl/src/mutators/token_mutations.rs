@@ -441,7 +441,7 @@ impl I2SRandReplace
         let chosen_rep = state.rand_mut().below(replacements_len);
         let replacement = {
             let cmp_meta = state.metadata_map_mut().get_mut::<CmpValuesMetadata>().unwrap();
-            cmp_meta.targeted_replacements.remove(chosen_rep)
+            cmp_meta.targeted_replacements[chosen_rep].clone()
         };
 
         let bytes = input.bytes();
@@ -451,8 +451,8 @@ impl I2SRandReplace
             }
         }
 
-        let current_vals = replacement.input_byte_values.to_owned();
-        let mut swap_vec = replacement.replacement_byte_values.to_owned();
+        let current_vals = replacement.input_byte_values;
+        let mut swap_vec = replacement.replacement_byte_values;
         // These values are equal - but the branch is uncovered, so presumably it's either !=, > or <
         if current_vals == swap_vec {
             // increment or decrement
@@ -498,7 +498,10 @@ impl I2SRandReplace
         for (cmp_idx, input_idx) in replacement.input_byte_indexes.into_iter().enumerate() {
             bytes[input_idx] = swap_vec[cmp_idx];
         }
-        
+
+        let cmp_meta = state.metadata_map_mut().get_mut::<CmpValuesMetadata>().unwrap();
+        cmp_meta.targeted_replacements.remove(chosen_rep);
+
         Ok(MutationResult::Mutated)
     }
 }
@@ -532,28 +535,76 @@ where
             }
         }
 
-        let num_replacements = {
-            let meta = state.metadata::<CmpValuesMetadata>().unwrap();
-            if meta.all_replacements.is_empty() {
+        let cmps_len = {
+            let Some(meta) = state.metadata_map().get::<CmpValuesMetadata>() else {
+                return Ok(MutationResult::Skipped);
+            };
+            log::trace!("meta: {:x?}", meta);
+            if meta.list.is_empty() {
                 return Ok(MutationResult::Skipped);
             }
-            meta.all_replacements.len()
+            meta.list.len()
+        };
+        let idx = state.rand_mut().below(cmps_len);
+
+        let meta = state.metadata::<CmpValuesMetadata>().unwrap();
+        let cmp_values = &meta.list[idx];
+
+        // convert to vecs
+        let (cmp1, cmp2) = match cmp_values {
+            CmpValues::U8(v) => (vec![v.0], vec![v.1]),
+            CmpValues::U16(v) => (v.0.to_ne_bytes().to_vec(), v.1.to_ne_bytes().to_vec()),
+            CmpValues::U32(v) => (v.0.to_ne_bytes().to_vec(), v.1.to_ne_bytes().to_vec()),
+            CmpValues::U64(v) => (v.0.to_ne_bytes().to_vec(), v.1.to_ne_bytes().to_vec()),
+            CmpValues::Bytes(v) => (v.0.to_owned(), v.1.to_owned())
         };
 
-        let rep_idx = state.rand_mut().below(num_replacements);
-        let meta = state.metadata::<CmpValuesMetadata>().unwrap();
-        let replacement = &meta.all_replacements[rep_idx];
+        if cmp1 == cmp2 {
+            // Why replace a slice with itself?
+            return Ok(MutationResult::Skipped);
+        }
+
+        let off = if cmp1.len() == size {
+            0
+        } else if cmp1.len() < size {
+            state.rand_mut().below(size - cmp1.len())
+        } else {
+            // the CmpValues is longer than the input... bye!
+            return Ok(MutationResult::Skipped);
+        };
+
+        let bytes = &input.bytes();
+        let mut replacement = None;
+
+        let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+        let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
+        // iterate through, searching for a match
+        for start_idx in off..=(size - cmp1.len()) {
+            let slice = &bytes[start_idx..(start_idx + cmp1.len())];
+            if cmp1 == slice {
+                replacement = Some((start_idx, &cmp2));
+            } else if rev1 == slice {
+                replacement = Some((start_idx, &rev2));
+            } else if cmp2 == slice {
+                replacement = Some((start_idx, &cmp1));
+            } else if rev2 == slice {
+                replacement = Some((start_idx, &rev1));
+            } else {
+                // no matches, move along 1-byte and try again
+                continue;
+            }
+            break;
+        }
+
+        let Some((start_idx, replacement_bytes)) = replacement else {
+            // didn't find any matches...
+            return Ok(MutationResult::Skipped);
+        };
 
         let bytes = input.bytes_mut();
-        for idx in 0..replacement.existing_bytes.len() {
-            if bytes[replacement.start_idx + idx] != replacement.existing_bytes[idx] {
-                // Looks like these bytes were already mutated so bail
-                return Ok(MutationResult::Skipped);
-            }
-        }
-        // I presume the compiler can figure out this is memcpy...
-        for idx in 0..replacement.new_bytes.len() {
-            bytes[replacement.start_idx + idx] = replacement.new_bytes[idx];
+        // I presume the compiler can figure out that this is memcpy...
+        for idx in 0..replacement_bytes.len() {
+            bytes[start_idx + idx] = replacement_bytes[idx];
         }
 
         Ok(MutationResult::Mutated)
