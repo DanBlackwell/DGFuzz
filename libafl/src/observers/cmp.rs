@@ -174,15 +174,15 @@ impl CmpValuesMetadata {
                 let mut trimmed_cmps = vec![]; 
                 for cmp_values in cmpvals {
                     // convert to vecs
-                    let (max_trim, cmp1, cmp2) = match cmp_values {
+                    let (is_num, max_trim, cmp1, cmp2) = match cmp_values {
                         // makes no sense to strip u8 or u16s
-                        CmpValues::U8(v)    => (0, vec![v.0], vec![v.1]),
-                        CmpValues::U16(v)   => (0, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::U8(v)    => (true,  0, vec![v.0], vec![v.1]),
+                        CmpValues::U16(v)   => (true,  0, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
                         // maybe a 24-bit int stuffed into a 32-bit
-                        CmpValues::U32(v)   => (1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::U32(v)   => (true,  1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
                         // maybe a 40-56-bit int stuffed into a 64-bit
-                        CmpValues::U64(v)   => (3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                        CmpValues::Bytes(v) => (v.0.len(), v.0.to_owned(), v.1.to_owned())
+                        CmpValues::U64(v)   => (true,  3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::Bytes(v) => (false, v.0.len(), v.0.to_owned(), v.1.to_owned())
                     };
 
                     // strip leading and trailing zeroes
@@ -204,12 +204,12 @@ impl CmpValuesMetadata {
                     if start > max_trim {
                         start = max_trim;
                     }
-                    trimmed_cmps.push((cmp1[start..].to_vec(), cmp2[start..].to_vec()));
+                    trimmed_cmps.push((is_num, cmp1[start..].to_vec(), cmp2[start..].to_vec()));
                     if cmp1.len() - end > 0 {
                         if cmp1.len() - end > max_trim {
                             end = cmp1.len() - max_trim;
                         }
-                        trimmed_cmps.push((cmp1[..end].to_vec(), cmp2[..end].to_vec()));
+                        trimmed_cmps.push((is_num, cmp1[..end].to_vec(), cmp2[..end].to_vec()));
                     }
                 }
 
@@ -222,7 +222,7 @@ impl CmpValuesMetadata {
                     let expanded_range: Vec<usize> = range.clone().collect();
 
                     // populate a complete list of matches for this cmpval in this edges dependent bytes
-                    for (cmp1, cmp2) in trimmed_cmps.clone() {
+                    for (is_num, cmp1, cmp2) in trimmed_cmps.clone() {
                         // skip boring replacements
                         if cmp1.len() < 1 || byte_vals.len() < cmp1.len() { continue; }
 
@@ -238,7 +238,7 @@ impl CmpValuesMetadata {
                         // if it's a palindrome we'll match it either direction
                         let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
                         let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-                        if cmp1 != rev1 {
+                        if is_num && cmp1 != rev1 {
                             memmem::find_iter(&byte_vals, &rev1)
                                 .map(|idx| TargetedCmpValReplace {
                                     input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
@@ -259,7 +259,7 @@ impl CmpValuesMetadata {
                             })
                             .for_each(|v| { all_replacements.insert(v); });
                         // if it's a palindrome we'll match it either direction
-                        if cmp2 != rev2 {
+                        if is_num && cmp2 != rev2 {
                             memmem::find_iter(&byte_vals, &rev2)
                                 .map(|idx| TargetedCmpValReplace {
                                     input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
@@ -268,6 +268,32 @@ impl CmpValuesMetadata {
                                     is_little_endian: true
                                 })
                                 .for_each(|v| { all_replacements.insert(v); });
+                        }
+
+                        if !is_num {
+                            let (mut cmp1_matched, mut cmp2_matched) = (false, false);
+                            for slice_len in 1..=core::cmp::min(byte_vals.len(), cmp1.len()) {
+                                let byte_vals_start = byte_vals.len() - slice_len;
+                                if !cmp1_matched && cmp1[..slice_len] == byte_vals[byte_vals_start..] {
+                                    cmp1_matched = true;
+                                    all_replacements.insert(TargetedCmpValReplace {
+                                        input_byte_indexes: expanded_range[byte_vals_start..].to_vec(),
+                                        input_byte_values: byte_vals[byte_vals_start..].to_vec(),
+                                        replacement_byte_values: cmp2[..slice_len].to_vec(),
+                                        is_little_endian: false
+                                    });
+                                }
+
+                                if !cmp2_matched && cmp2[..slice_len] == byte_vals[byte_vals_start..] {
+                                    cmp2_matched = true;
+                                    all_replacements.insert(TargetedCmpValReplace {
+                                        input_byte_indexes: expanded_range[byte_vals_start..].to_vec(),
+                                        input_byte_values: byte_vals[byte_vals_start..].to_vec(),
+                                        replacement_byte_values: cmp1[..slice_len].to_vec(),
+                                        is_little_endian: false
+                                    });
+                                }
+                            }
                         }
                     }
                 }

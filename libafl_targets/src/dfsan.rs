@@ -102,7 +102,7 @@ where
     >,
     dfsan_labels_map: OwnedMutSlice<'a, u8>,
     mutations_per_stage: usize,
-    last_new_corpus_entry_time: Option<(CorpusId, std::time::Instant)>,
+    last_new_coverage_time: Option<(usize, std::time::Instant)>,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(E, EM, Z)>,
 }
@@ -154,7 +154,7 @@ where
             executor,
             dfsan_labels_map: dfsan_labels_map_slice,
             mutations_per_stage,
-            last_new_corpus_entry_time: None,
+            last_new_coverage_time: None,
             phantom: PhantomData,
         }
     }
@@ -947,16 +947,18 @@ where
             });
         }
 
-        let last_new = self.last_new_corpus_entry_time;
-        if let Some(last) = state.corpus().last() {
-            if last_new.is_none() || last > last_new.unwrap().0 {
-                self.last_new_corpus_entry_time = Some((last, std::time::Instant::now()));
-            }
+        let covered = state.metadata::<MapNeighboursFeedbackMetadata>()
+            .unwrap()
+            .covered_blocks.len();
+        let last_new = self.last_new_coverage_time;
+        if last_new.is_none() || covered > last_new.unwrap().0 {
+            self.last_new_coverage_time = Some((covered, std::time::Instant::now()));
         }
 
         let Some((corpus_id, found_time)) = last_new else {
             return Ok(());
         };
+
 
         if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
             meta.current_mutation_type = DiscoveryMutationType::DataflowGuidedHavoc;
@@ -976,7 +978,7 @@ where
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
             // The campaign is still going fast, so don't waste time computing DF-dependencies
             // that may never be used
-            if found_time.elapsed() < std::time::Duration::from_secs(3) {
+            if found_time.elapsed() < std::time::Duration::from_secs(5) {
                 return Ok(());
             }
 

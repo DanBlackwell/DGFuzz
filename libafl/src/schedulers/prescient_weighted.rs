@@ -44,8 +44,8 @@ pub struct ProbabilityMetadata {
     pub map: HashMap<CorpusId, f64>,
     /// total probability of all items in the map
     pub total_probability: f64,
-    /// Do we need to recalculate the scores?
-    pub needs_recalc: bool,
+    /// Have we found a new corpus entry since last recalc?
+    pub new_corpus_entry: bool,
     /// The time that we last recalculated all the scores (in millis)
     pub last_recalc_time: u128,
     /// The amount of time the last recalc took
@@ -61,7 +61,7 @@ impl ProbabilityMetadata {
         Self {
             map: HashMap::default(),
             total_probability: 0.0,
-            needs_recalc: false,
+            new_corpus_entry: false,
             last_recalc_time: 0,
             last_recalc_duration: 0,
         }
@@ -278,8 +278,17 @@ where
             meta.map.insert(entry, score);
         }
 
-        // all_scores.sort_by(|(_, score1), (_, score2)| score1.partial_cmp(score2).unwrap());
-        // println!("Scores: {:?}", all_scores);
+        all_scores.sort_by(|(_, score1), (_, score2)| score1.partial_cmp(score2).unwrap());
+        print!("Scores: ");
+        let mut last_idx = 999999999;
+        for i in 0..=10 {
+            let idx = ((i as f64 / 10.0) * (all_scores.len() - 1) as f64) as usize;
+            if idx != last_idx {
+                print!("{}%ile: {:.5}, ", i * 10, all_scores[idx].1);
+            }
+            last_idx = idx;
+        }
+        println!("");
 
         let meta = state
             .metadata_map_mut()
@@ -316,7 +325,7 @@ where
         }
 
         let prob_meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-        prob_meta.needs_recalc = true;
+        prob_meta.new_corpus_entry = true;
         let avg = prob_meta.total_probability / prob_meta.map.len() as f64;
         prob_meta.map.insert(idx, avg);
         prob_meta.total_probability += avg;
@@ -335,7 +344,7 @@ where
             return Err(Error::empty(String::from("No entries in corpus")));
         }
 
-        let pick_random = state.rand_mut().below(10) == 0;
+        let pick_random = state.rand_mut().below(8) == 0;
         let rand_idx = {
             let corp = state.corpus().count();
             CorpusId::from(state.rand_mut().below(corp))
@@ -343,24 +352,25 @@ where
         let rand_prob: f64 = state.rand_mut().next_float();
 
         let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-        if meta.needs_recalc {
-            let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-            let time_since_recalc = ts_now - meta.last_recalc_time;
-            let last_duration = meta.last_recalc_duration;
+        let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let time_since_recalc = ts_now - meta.last_recalc_time;
+        let last_duration = meta.last_recalc_duration;
+
+        if (time_since_recalc >= 25 * last_duration) ||
+            (time_since_recalc >= 10 * last_duration && meta.new_corpus_entry)
+        {
             // Don't spend more than 10% of the fuzzer time recalculating these stats - sure
             // this feels like we're not using the neighbours prescient power much at the start
             // of the campaign, but fuzzing campaigns last hours...
-            if time_since_recalc >= (10 * last_duration)  {
-                println!("Last recalc took {last_duration}ms, now recalcing as it has been {time_since_recalc}");
-                let start = Instant::now();
-                self.recalculate_reachable_blocks(state);
-                self.recalc_all_probabilities(state).unwrap();
+            println!("Last recalc took {last_duration}ms, now recalcing as it has been {time_since_recalc}");
+            let start = Instant::now();
+            self.recalculate_reachable_blocks(state);
+            self.recalc_all_probabilities(state).unwrap();
 
-                let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-                meta.needs_recalc = false;
-                meta.last_recalc_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-                meta.last_recalc_duration = start.elapsed().as_millis();
-            }
+            let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
+            meta.new_corpus_entry = false;
+            meta.last_recalc_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+            meta.last_recalc_duration = start.elapsed().as_millis();
         }
 
         let selected_index = if pick_random {
