@@ -109,6 +109,9 @@ pub struct AnyCmpValReplace {
     /// The index that this replacement begins at
     #[serde(skip)]
     pub start_idx: usize,
+    /// Vec containing the current bytes (to be swapped out)
+    #[serde(skip)]
+    pub existing_bytes: Vec<u8>,
     /// Vec containing the new bytes (to be swapped in)
     #[serde(skip)]
     pub new_bytes: Vec<u8>,
@@ -215,25 +218,41 @@ impl CmpValuesMetadata {
             for (cmp1, cmp2) in trimmed_cmps {
                 // collect up matches for cmpval side 1
                 memmem::find_iter(&bytes, &cmp1).for_each(|start_idx| { 
-                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp2.clone() }); 
+                    replacements.insert(AnyCmpValReplace { 
+                        start_idx, 
+                        existing_bytes: cmp1.clone(),
+                        new_bytes: cmp2.clone() 
+                    }); 
                 });
                 // if it's a palindrome we'll match it either direction
                 let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
                 let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
                 if cmp1 != rev1 {
                     memmem::find_iter(&bytes, &rev1).for_each(|start_idx| { 
-                        replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev2.clone() }); 
+                        replacements.insert(AnyCmpValReplace { 
+                            start_idx, 
+                            existing_bytes: rev1.clone(),
+                            new_bytes: rev2.clone() 
+                        }); 
                     });
                 }
 
                 // collect up matches for cmpval side 2
                 memmem::find_iter(&bytes, &cmp2).for_each(|start_idx| { 
-                    replacements.insert(AnyCmpValReplace { start_idx, new_bytes: cmp1.clone() }); 
+                    replacements.insert(AnyCmpValReplace { 
+                        start_idx, 
+                        existing_bytes: cmp2.clone(),
+                        new_bytes: cmp1.clone() 
+                    }); 
                 });
                 // if it's a palindrome we'll match it either direction
                 if cmp2 != rev2 {
                     memmem::find_iter(&bytes, &rev2).for_each(|start_idx| { 
-                        replacements.insert(AnyCmpValReplace { start_idx, new_bytes: rev1.clone() }); 
+                        replacements.insert(AnyCmpValReplace { 
+                            start_idx, 
+                            existing_bytes: rev2.clone(),
+                            new_bytes: rev1.clone() 
+                        }); 
                     });
                 }
             }

@@ -444,6 +444,13 @@ impl I2SRandReplace
             cmp_meta.targeted_replacements.remove(chosen_rep)
         };
 
+        let bytes = input.bytes();
+        for (offset, idx) in replacement.input_byte_indexes.iter().enumerate() {
+            if bytes[*idx] != replacement.input_byte_values[offset] {
+                return Ok(MutationResult::Skipped);
+            }
+        }
+
         let current_vals = replacement.input_byte_values.to_owned();
         let mut swap_vec = replacement.replacement_byte_values.to_owned();
         // These values are equal - but the branch is uncovered, so presumably it's either !=, > or <
@@ -538,6 +545,12 @@ where
         let replacement = &meta.all_replacements[rep_idx];
 
         let bytes = input.bytes_mut();
+        for idx in 0..replacement.existing_bytes.len() {
+            if bytes[replacement.start_idx + idx] != replacement.existing_bytes[idx] {
+                // Looks like these bytes were already mutated so bail
+                return Ok(MutationResult::Skipped);
+            }
+        }
         // I presume the compiler can figure out this is memcpy...
         for idx in 0..replacement.new_bytes.len() {
             bytes[replacement.start_idx + idx] = replacement.new_bytes[idx];
