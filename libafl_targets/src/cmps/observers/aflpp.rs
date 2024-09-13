@@ -109,16 +109,17 @@ where
         S: HasMetadata,
     {
         #[allow(clippy::option_if_let_else)] // we can't mutate state in a closure
-        let mut meta = if let Some(meta) = state.metadata_map_mut().get_mut::<AFLppCmpValuesMetadata>()
-        {
-            meta
-        } else {
-            state.add_metadata(AFLppCmpValuesMetadata::new());
-            state
-                .metadata_map_mut()
-                .get_mut::<AFLppCmpValuesMetadata>()
-                .unwrap()
-        }.clone();
+        let mut meta =
+            if let Some(meta) = state.metadata_map_mut().get_mut::<AFLppCmpValuesMetadata>() {
+                meta
+            } else {
+                state.add_metadata(AFLppCmpValuesMetadata::new());
+                state
+                    .metadata_map_mut()
+                    .get_mut::<AFLppCmpValuesMetadata>()
+                    .unwrap()
+            }
+            .clone();
 
         if self.original {
             // If this observer is for original input, then we have run the un-mutated input

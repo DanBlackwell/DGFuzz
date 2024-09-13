@@ -336,8 +336,11 @@ impl CmpMap for CmpLogMap {
     fn cov_map_idx_for(&self, idx: usize) -> usize {
         let ret_addr = self.headers[idx].return_addr;
         unsafe {
-            SANCOV_PC_TABLE.as_mut().unwrap()
-                .entry_containing_address(ret_addr).unwrap()
+            SANCOV_PC_TABLE
+                .as_mut()
+                .unwrap()
+                .entry_containing_address(ret_addr)
+                .unwrap()
                 .cov_map_idx()
         }
     }
@@ -499,9 +502,8 @@ impl Serialize for AFLppCmpLogMap {
     where
         S: Serializer,
     {
-        let slice = unsafe {
-            slice::from_raw_parts(ptr::from_ref(self) as *const u8, size_of::<Self>())
-        };
+        let slice =
+            unsafe { slice::from_raw_parts(ptr::from_ref(self) as *const u8, size_of::<Self>()) };
         serializer.serialize_bytes(slice)
     }
 }

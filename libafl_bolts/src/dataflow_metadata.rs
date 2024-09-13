@@ -1,19 +1,19 @@
-use serde::{Serialize, Deserialize};
-use hashbrown::{HashMap, HashSet};
 use crate::Vec;
 use core::ops::Range;
+use hashbrown::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
 
 /// A wrapper for u32 indicating the Coverage map index for a basic block / instruction
-#[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
+#[derive(Hash, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CoverageMapIdx(pub u32);
 crate::impl_serdeany!(CoverageMapIdx);
 
 /// A wrapper for u64 indicating the uuid for a basic block
-#[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
+#[derive(Hash, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BasicBlockUUID(pub u32);
 crate::impl_serdeany!(BasicBlockUUID);
 
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Fuzzer (global) level metadata for DFSan stage
 pub struct FuzzerDataflowMetadata {
     /// Number of mutations tested for a given target edge (neighbour)
@@ -22,7 +22,7 @@ pub struct FuzzerDataflowMetadata {
 
 crate::impl_serdeany!(FuzzerDataflowMetadata);
 
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Metadata indicating the direct neighbours for each edge (for a given testcase)
 /// We need this because of indirect function calls not being resolvable otherwise
 pub struct TestcaseDirectNeighboursMetadata {
@@ -36,9 +36,11 @@ pub struct TestcaseDirectNeighboursMetadata {
 
 crate::impl_serdeany!(TestcaseDirectNeighboursMetadata);
 
-#[derive(Clone,Debug,Eq,Hash,PartialEq,Serialize,Deserialize)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 /// Struct containing a set of bytes depended on by a branch - internally uses a list of Ranges to save mem
-pub struct DependentBytes { list: Vec<Range<usize>> }
+pub struct DependentBytes {
+    list: Vec<Range<usize>>,
+}
 
 impl DependentBytes {
     /// Construct a `DependentBytes` struct from an unsorted list of `usize`
@@ -54,8 +56,8 @@ impl DependentBytes {
         let mut start_idx = None;
         let mut prev_idx = None;
         for &idx in sorted_vec {
-            if start_idx.is_none() { 
-                start_idx = Some(idx); 
+            if start_idx.is_none() {
+                start_idx = Some(idx);
                 prev_idx = Some(idx);
             } else {
                 if idx != prev_idx.unwrap() + 1 {
@@ -89,7 +91,7 @@ impl DependentBytes {
     }
 }
 
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Testcase level metadata for DFSan stage
 pub struct TestcaseDataflowMetadata {
     /// number of mutations applied to target bytes

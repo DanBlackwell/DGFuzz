@@ -8,11 +8,16 @@ use libafl_bolts::{current_time, impl_serdeany, tuples::Handle, AsIter, Named};
 use num_traits::Bounded;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "introspection")]
+use crate::state::HasClientPerfMonitor;
 use crate::{
     corpus::{Corpus, SchedulerTestcaseMetadata},
     events::{Event, EventFirer, LogSeverity},
     executors::{Executor, ExitKind, HasObservers},
-    feedbacks::{map::{MapNeighboursFeedbackMetadata, MapFeedbackMetadata}, HasObserverHandle},
+    feedbacks::{
+        map::{MapFeedbackMetadata, MapNeighboursFeedbackMetadata},
+        HasObserverHandle,
+    },
     fuzzer::Evaluator,
     inputs::UsesInput,
     monitors::{AggregatorOps, UserStats, UserStatsValue},
@@ -22,8 +27,6 @@ use crate::{
     state::{HasCorpus, HasCurrentTestcase, HasExecutions, State, UsesState},
     Error, HasMetadata, HasNamedMetadata,
 };
-#[cfg(feature = "introspection")]
-use crate::state::HasClientPerfMonitor;
 
 /// The metadata to keep unstable entries
 /// In libafl, the stability is the number of the unstable entries divided by the size of the map
@@ -185,8 +188,7 @@ where
                 }
 
                 if iter < CAL_STAGE_MAX {
-                    let neighbours_state = state
-                        .metadata_mut::<MapNeighboursFeedbackMetadata>();
+                    let neighbours_state = state.metadata_mut::<MapNeighboursFeedbackMetadata>();
                     if let Ok(neighbours_state) = neighbours_state {
                         for &entry in &unstable_entries {
                             neighbours_state.covered_blocks.insert(entry);

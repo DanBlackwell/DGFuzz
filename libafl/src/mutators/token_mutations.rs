@@ -22,12 +22,18 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
 use crate::mutators::str_decode;
+use crate::prelude::{DiscoveriesMutationTypeMetadata, DiscoveryMutationType};
 use crate::{
-    corpus::{CorpusId, HasCurrentCorpusId}, inputs::{HasMutatorBytes, UsesInput}, mutators::{
+    corpus::{CorpusId, HasCurrentCorpusId},
+    inputs::{HasMutatorBytes, UsesInput},
+    mutators::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
-    }, observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata}, stages::TaintMetadata, state::{HasCorpus, HasMaxSize, HasRand}, Error, HasMetadata
+    },
+    observers::cmp::{AFLppCmpValuesMetadata, CmpValues, CmpValuesMetadata},
+    stages::TaintMetadata,
+    state::{HasCorpus, HasMaxSize, HasRand},
+    Error, HasMetadata,
 };
-use crate::prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata};
 
 /// A state metadata holding a list of tokens
 #[allow(clippy::unsafe_derive_deserialize)]
@@ -419,9 +425,12 @@ impl TokenReplace {
 #[derive(Debug, Default)]
 pub struct I2SRandReplace;
 
-impl I2SRandReplace
-{
-    fn targeted_replace<I, S>(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> 
+impl I2SRandReplace {
+    fn targeted_replace<I, S>(
+        &mut self,
+        state: &mut S,
+        input: &mut I,
+    ) -> Result<MutationResult, Error>
     where
         S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus,
         I: HasMutatorBytes,
@@ -438,7 +447,10 @@ impl I2SRandReplace
 
         let chosen_rep = state.rand_mut().below(replacements_len);
         let replacement = {
-            let cmp_meta = state.metadata_map_mut().get_mut::<CmpValuesMetadata>().unwrap();
+            let cmp_meta = state
+                .metadata_map_mut()
+                .get_mut::<CmpValuesMetadata>()
+                .unwrap();
             cmp_meta.targeted_replacements[chosen_rep].clone()
         };
 
@@ -497,7 +509,10 @@ impl I2SRandReplace
             bytes[input_idx] = swap_vec[cmp_idx];
         }
 
-        let cmp_meta = state.metadata_map_mut().get_mut::<CmpValuesMetadata>().unwrap();
+        let cmp_meta = state
+            .metadata_map_mut()
+            .get_mut::<CmpValuesMetadata>()
+            .unwrap();
         cmp_meta.targeted_replacements.remove(chosen_rep);
 
         Ok(MutationResult::Mutated)
@@ -519,15 +534,21 @@ where
         if state.rand_mut().below(6) == 0 {
             let res = self.targeted_replace(state, input)?;
             // if there were no exact matches fall back to standard cmplog
-            if res == MutationResult::Mutated { 
-                if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+            if res == MutationResult::Mutated {
+                if let Some(meta) = state
+                    .metadata_map_mut()
+                    .get_mut::<DiscoveriesMutationTypeMetadata>()
+                {
                     meta.current_mutation_type = DiscoveryMutationType::TargetedCmpLog;
                 }
-                return Ok(res); 
+                return Ok(res);
             }
         }
 
-        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+        if let Some(meta) = state
+            .metadata_map_mut()
+            .get_mut::<DiscoveriesMutationTypeMetadata>()
+        {
             if meta.current_mutation_type != DiscoveryMutationType::TargetedCmpLog {
                 meta.current_mutation_type = DiscoveryMutationType::StandardCmpLog;
             }

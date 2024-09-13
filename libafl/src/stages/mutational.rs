@@ -12,11 +12,11 @@ use crate::{
     inputs::Input,
     mark_feature_time,
     mutators::{MultiMutator, MutationResult, Mutator},
+    prelude::{DiscoveriesMutationTypeMetadata, DiscoveryMutationType},
     stages::{ExecutionCountRestartHelper, RetryRestartHelper, Stage},
     start_timer,
     state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasRand, UsesState},
     Error, HasMetadata, HasNamedMetadata,
-    prelude::{DiscoveryMutationType, DiscoveriesMutationTypeMetadata}
 };
 #[cfg(feature = "introspection")]
 use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
@@ -117,12 +117,15 @@ where
         */
         let num = self.iterations(state)?;
         let mut testcase = state.current_testcase_mut()?;
-        if let Some(meta) = testcase.metadata_map_mut().get_mut::<TestcaseMutationsMetadata>() {
+        if let Some(meta) = testcase
+            .metadata_map_mut()
+            .get_mut::<TestcaseMutationsMetadata>()
+        {
             meta.num_mutations_executed += num;
         } else {
-            testcase.add_metadata(
-                TestcaseMutationsMetadata { num_mutations_executed: num }
-            );
+            testcase.add_metadata(TestcaseMutationsMetadata {
+                num_mutations_executed: num,
+            });
         }
 
         let Ok(input) = I::try_transform_from(&mut testcase, state) else {
@@ -132,7 +135,10 @@ where
         mark_feature_time!(state, PerfFeature::GetInputFromCorpus);
 
         for _ in 0..num {
-            if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+            if let Some(meta) = state
+                .metadata_map_mut()
+                .get_mut::<DiscoveriesMutationTypeMetadata>()
+            {
                 meta.current_mutation_type = DiscoveryMutationType::StandardHavoc;
             }
 

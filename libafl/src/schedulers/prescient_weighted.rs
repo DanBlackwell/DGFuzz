@@ -1,8 +1,8 @@
 //! Prescient Weighted sampling scheduler is a corpus scheduler that feeds the fuzzer
 
-use std::vec::Vec;
 use alloc::string::String;
-use core::{marker::PhantomData, fmt::Debug};
+use core::{fmt::Debug, marker::PhantomData};
+use std::vec::Vec;
 
 use hashbrown::HashMap;
 use libafl_bolts::rands::Rand;
@@ -11,15 +11,15 @@ use serde::{Deserialize, Serialize};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::{
-    HasMetadata, HasNamedMetadata,
-    corpus::{testcase::TestcaseMutationsMetadata, Corpus, CorpusId, HasTestcase}, 
-    feedbacks::{cfg_prescience::{ControlFlowGraph, Reachability}, 
-    MapIndexesMetadata, 
-    MapNeighboursFeedbackMetadata, 
-    }, 
-    inputs::UsesInput, 
-    schedulers::Scheduler, 
-    state::{HasCorpus, HasRand, State, UsesState}, Error
+    corpus::{testcase::TestcaseMutationsMetadata, Corpus, CorpusId, HasTestcase},
+    feedbacks::{
+        cfg_prescience::{ControlFlowGraph, Reachability},
+        MapIndexesMetadata, MapNeighboursFeedbackMetadata,
+    },
+    inputs::UsesInput,
+    schedulers::Scheduler,
+    state::{HasCorpus, HasRand, State, UsesState},
+    Error, HasMetadata, HasNamedMetadata,
 };
 
 /// Calculate Testcase probabilities using prescience
@@ -84,7 +84,6 @@ struct ReachableBlocksResult {
     least_depth_for_index: HashMap<usize, usize>,
 }
 
-
 impl<S> PrescientProbabilitySamplingScheduler<S>
 where
     S: HasCorpus + HasMetadata + HasNamedMetadata + HasRand,
@@ -112,7 +111,7 @@ where
     /// return a map of {(index, depth): frequency}, where frequency is the number of testcases
     /// with this index being reachable at the given depth
     fn recalculate_reachable_blocks(&self, state: &mut S) -> ReachableBlocksResult {
-        let mut result = ReachableBlocksResult { 
+        let mut result = ReachableBlocksResult {
             frequency_for_reachability: HashMap::new(),
             direct_neighbour_mutations_for_index: HashMap::new(),
             least_depth_for_index: HashMap::new(),
@@ -136,7 +135,7 @@ where
             let covered_meta = tc.metadata::<MapIndexesMetadata>().unwrap();
             let covered_indexes = covered_meta.list.clone();
             let num_mutations = if let Ok(meta) = tc.metadata::<TestcaseMutationsMetadata>() {
-                meta.num_mutations_executed        
+                meta.num_mutations_executed
             } else {
                 0
             };
@@ -145,7 +144,9 @@ where
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
                 cfg_metadata.get_all_neighbours_upto_depth(
-                    self.max_depth, &covered_indexes, &covered_blocks
+                    self.max_depth,
+                    &covered_indexes,
+                    &covered_blocks,
                 )
             };
 
@@ -159,23 +160,27 @@ where
 
                 // update number of mutations of direct neighbours (if appropriate)
                 if reachability.depth == 1 {
-                    if let Some(freq) = result.direct_neighbour_mutations_for_index
-                        .get_mut(&reachability.direct_neighbour_ancestor_index) 
+                    if let Some(freq) = result
+                        .direct_neighbour_mutations_for_index
+                        .get_mut(&reachability.direct_neighbour_ancestor_index)
                     {
                         *freq += num_mutations;
                     } else {
-                        result.direct_neighbour_mutations_for_index
+                        result
+                            .direct_neighbour_mutations_for_index
                             .insert(reachability.direct_neighbour_ancestor_index, num_mutations);
                     }
                 }
 
                 // update least depth for index (if we beat the previous depth)
                 if let Some(cur_min) = result.least_depth_for_index.get_mut(&reachability.index) {
-                    if reachability.depth < *cur_min { 
+                    if reachability.depth < *cur_min {
                         *cur_min = reachability.depth
                     }
                 } else {
-                    result.least_depth_for_index.insert(reachability.index, reachability.depth);
+                    result
+                        .least_depth_for_index
+                        .insert(reachability.index, reachability.depth);
                 }
             }
         }
@@ -189,9 +194,7 @@ where
     pub fn recalc_all_probabilities(&self, state: &mut S) -> Result<(), Error> {
         let reachable_blocks_result = self.recalculate_reachable_blocks(state);
 
-        let full_neighbours_meta = state
-            .metadata::<MapNeighboursFeedbackMetadata>()
-            .unwrap();
+        let full_neighbours_meta = state.metadata::<MapNeighboursFeedbackMetadata>().unwrap();
         let covered_blocks = full_neighbours_meta.covered_blocks.clone();
 
         let mut total_score = 0.0;
@@ -206,10 +209,14 @@ where
         for &id in &ids {
             let mut tc = state.corpus().get(id)?.borrow_mut();
             let len = tc.load_len(state.corpus()).unwrap() as f64;
-            if len < min_len { min_len = len; }
+            if len < min_len {
+                min_len = len;
+            }
             len_for_id.insert(id, len);
             let exec_time_ns = tc.exec_time().unwrap().as_nanos() as f64;
-            if exec_time_ns < min_time { min_time = exec_time_ns; }
+            if exec_time_ns < min_time {
+                min_time = exec_time_ns;
+            }
             time_ordered.push((id, exec_time_ns * len));
         }
         time_ordered.sort_by(|(_id, score1), (_id2, score2)| score1.partial_cmp(score2).unwrap());
@@ -217,7 +224,9 @@ where
         // The more this neighbour has been fuzzed, the less we'll prioritise it (maybe it's hard or infeasible)
         let backoff_weighting_for_direct_neighbour = {
             let mut weighting = HashMap::new();
-            for (&index, &mutations) in &reachable_blocks_result.direct_neighbour_mutations_for_index {
+            for (&index, &mutations) in
+                &reachable_blocks_result.direct_neighbour_mutations_for_index
+            {
                 let decrements = mutations / 1_000;
                 weighting.insert(index, self.backoff_factor.powi(decrements as i32));
             }
@@ -239,19 +248,34 @@ where
             let reachabilities = {
                 let cfg_metadata = state.metadata_mut::<ControlFlowGraph>().unwrap();
                 cfg_metadata.get_all_neighbours_upto_depth(
-                    self.max_depth, &covered_indexes, &covered_blocks
+                    self.max_depth,
+                    &covered_indexes,
+                    &covered_blocks,
                 )
             };
 
             for reachability in reachabilities {
                 // Only keep this if it's the best depth we've seen for this edge
-                if reachability.depth == reachable_blocks_result.least_depth_for_index[&reachability.index] {
-                    let freq = reachable_blocks_result.frequency_for_reachability.get(&reachability);
-                    if freq.is_none() { println!("frequency is none for {:?}", reachability); }
+                if reachability.depth
+                    == reachable_blocks_result.least_depth_for_index[&reachability.index]
+                {
+                    let freq = reachable_blocks_result
+                        .frequency_for_reachability
+                        .get(&reachability);
+                    if freq.is_none() {
+                        println!("frequency is none for {:?}", reachability);
+                    }
                     let rarity = 1f64 / *freq.unwrap() as f64;
-                    let backoff_weighting = backoff_weighting_for_direct_neighbour.get(&reachability.direct_neighbour_ancestor_index);
-                    if backoff_weighting.is_none() { println!("backoff_weighting is none for {:?}", reachability.direct_neighbour_ancestor_index); }
-                    neighbour_score += backoff_weighting.unwrap() * rarity * 1f64 / reachability.depth as f64;
+                    let backoff_weighting = backoff_weighting_for_direct_neighbour
+                        .get(&reachability.direct_neighbour_ancestor_index);
+                    if backoff_weighting.is_none() {
+                        println!(
+                            "backoff_weighting is none for {:?}",
+                            reachability.direct_neighbour_ancestor_index
+                        );
+                    }
+                    neighbour_score +=
+                        backoff_weighting.unwrap() * rarity * 1f64 / reachability.depth as f64;
                 }
             }
             neighbour_score_for_idx.insert(entry, neighbour_score);
@@ -324,7 +348,10 @@ where
             state.add_metadata(ProbabilityMetadata::new());
         }
 
-        let prob_meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
+        let prob_meta = state
+            .metadata_map_mut()
+            .get_mut::<ProbabilityMetadata>()
+            .unwrap();
         prob_meta.new_corpus_entry = true;
         let avg = prob_meta.total_probability / prob_meta.map.len() as f64;
         prob_meta.map.insert(idx, avg);
@@ -352,13 +379,19 @@ where
         };
         let rand_prob: f64 = state.rand_mut().next_float();
 
-        let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
-        let ts_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let meta = state
+            .metadata_map_mut()
+            .get_mut::<ProbabilityMetadata>()
+            .unwrap();
+        let ts_now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
         let time_since_recalc = ts_now - meta.last_recalc_time;
         let last_duration = meta.last_recalc_duration;
 
-        if (time_since_recalc >= 100 * last_duration) ||
-            (time_since_recalc >= 10 * last_duration && meta.new_corpus_entry)
+        if (time_since_recalc >= 100 * last_duration)
+            || (time_since_recalc >= 10 * last_duration && meta.new_corpus_entry)
         {
             // Don't spend more than 10% of the fuzzer time recalculating these stats - sure
             // this feels like we're not using the neighbours prescient power much at the start
@@ -368,9 +401,15 @@ where
             self.recalculate_reachable_blocks(state);
             self.recalc_all_probabilities(state).unwrap();
 
-            let meta = state.metadata_map_mut().get_mut::<ProbabilityMetadata>().unwrap();
+            let meta = state
+                .metadata_map_mut()
+                .get_mut::<ProbabilityMetadata>()
+                .unwrap();
             meta.new_corpus_entry = false;
-            meta.last_recalc_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+            meta.last_recalc_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
             meta.last_recalc_duration = start.elapsed().as_millis();
         }
 

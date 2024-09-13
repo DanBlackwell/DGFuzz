@@ -9,29 +9,41 @@ use std::path::PathBuf;
 // use crate::libfuzzer_test_one_input;
 use libafl_bolts::{
     dataflow_metadata::{
-        CoverageMapIdx, FuzzerDataflowMetadata, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata, DependentBytes
+        CoverageMapIdx, DependentBytes, FuzzerDataflowMetadata, TestcaseDataflowMetadata,
+        TestcaseDirectNeighboursMetadata,
     },
     ownedref::OwnedMutSlice,
     rands::Rand,
+    shmem::UnixShMemProvider,
     shmem::{ShMemDescription, ShMemMetadata},
     tuples::{tuple_list, tuple_list_type},
-    shmem::UnixShMemProvider,
     AsSliceMut, HasLen,
 };
 
 use libafl::{
-    common::HasMetadata, corpus::{Corpus, CorpusId}, events::{EventFirer, EventRestarter}, executors::{Executor, ForkserverExecutor, HasObservers}, feedbacks::{
+    common::HasMetadata,
+    corpus::{Corpus, CorpusId},
+    events::{EventFirer, EventRestarter},
+    executors::{Executor, ForkserverExecutor, HasObservers},
+    feedbacks::{
         cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata,
-    }, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{
+    },
+    inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput},
+    mark_feature_time,
+    mutators::{
         BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
-        ByteNegMutator, ByteRandMutator,
-        BytesRandSetMutator, DwordAddMutator,
-        MutationResult, Mutator, QwordAddMutator, StdScheduledMutator,
-        WordAddMutator,
-    }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{DiscoveriesMutationTypeMetadata, DiscoveryMutationType}, stages::{
+        ByteNegMutator, ByteRandMutator, BytesRandSetMutator, DwordAddMutator, MutationResult,
+        Mutator, QwordAddMutator, StdScheduledMutator, WordAddMutator,
+    },
+    observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver},
+    prelude::{DiscoveriesMutationTypeMetadata, DiscoveryMutationType},
+    stages::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
-    }, start_timer, state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState}, Error, Evaluator, ExecuteInputResult, HasObjective
+    },
+    start_timer,
+    state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState},
+    Error, Evaluator, ExecuteInputResult, HasObjective,
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -181,20 +193,22 @@ where
         buf[0] = labels.len() as u8;
         let mut pos = 1;
         for label in labels {
-            buf[pos]     = ((label.start_pos >> 24) & 0xFF) as u8;
+            buf[pos] = ((label.start_pos >> 24) & 0xFF) as u8;
             buf[pos + 1] = ((label.start_pos >> 16) & 0xFF) as u8;
             buf[pos + 2] = ((label.start_pos >> 8) & 0xFF) as u8;
             buf[pos + 3] = (label.start_pos & 0xFF) as u8;
             pos += 4;
 
-            buf[pos]     = ((label.len >> 24) & 0xFF) as u8;
+            buf[pos] = ((label.len >> 24) & 0xFF) as u8;
             buf[pos + 1] = ((label.len >> 16) & 0xFF) as u8;
             buf[pos + 2] = ((label.len >> 8) & 0xFF) as u8;
             buf[pos + 3] = (label.len & 0xFF) as u8;
             pos += 4;
         }
 
-        self.executor.run_target(fuzzer, state, manager, input).unwrap();
+        self.executor
+            .run_target(fuzzer, state, manager, input)
+            .unwrap();
 
         // let mut all_edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
         // for edge_num in 0..31 {
@@ -310,7 +324,8 @@ where
             res
         };
 
-        let all_required: HashSet<usize> = this_cfg_to_dfsan_edge_mapping.values().copied().collect();
+        let all_required: HashSet<usize> =
+            this_cfg_to_dfsan_edge_mapping.values().copied().collect();
         let mut stack = vec![(all_required, 0..input.bytes().len())];
         // once there are MAX_DEPENDENT_BYTES bytes dependent, stop trying to compute more!
         let mut saturated_conds = HashSet::new();
@@ -327,7 +342,9 @@ where
             if required_edges.len() < saturated_conds.len() {
                 required_edges.retain(|req| !saturated_conds.contains(req));
             } else {
-                for sat in &saturated_conds { required_edges.remove(sat); }
+                for sat in &saturated_conds {
+                    required_edges.remove(sat);
+                }
             }
             filter_req_time += start.elapsed();
             if required_edges.is_empty() {
@@ -355,9 +372,8 @@ where
                 if linfo.len == 1 {
                     for edge_idx in edges {
                         let mapped_edge_idx = dfsan_to_this_cfg_edge_mapping[&edge_idx];
-                        let dependent_bytes = bytes_depended_on_by_edge
-                            .get_mut(&mapped_edge_idx)
-                            .unwrap();
+                        let dependent_bytes =
+                            bytes_depended_on_by_edge.get_mut(&mapped_edge_idx).unwrap();
                         if dependent_bytes.len() >= MAX_DEPENDENT_BYTES {
                             saturated_conds.insert(edge_idx);
                         } else {
@@ -526,9 +542,10 @@ where
             }
             let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
             // if we've already tested every possible value for this edge...
-            if dependent_bytes.raw_ranges().len() == 1 && 
-                dependent_bytes.raw_ranges()[0].clone().count() == 1 && 
-                muts >= 256 {
+            if dependent_bytes.raw_ranges().len() == 1
+                && dependent_bytes.raw_ranges()[0].clone().count() == 1
+                && muts >= 256
+            {
                 continue;
             }
 
@@ -537,7 +554,8 @@ where
                 let muts = df_meta.num_mutations_for_edge.get(uncovered_bb).unwrap();
                 power += muts;
 
-                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
+                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes)
+                {
                     *bytes_power += power;
                     if *bytes_power > max_power {
                         max_power = *bytes_power;
@@ -558,8 +576,9 @@ where
             let mut res = HashMap::new();
             // we haven't fuzzed any of these yet! Fuzz them all the same amount
             if total_muts == 0 {
-                let muts = f64::ceil(num_mutations as f64 / 
-                                     power_for_mutation_target_bytes.len() as f64) as usize;
+                let muts =
+                    f64::ceil(num_mutations as f64 / power_for_mutation_target_bytes.len() as f64)
+                        as usize;
 
                 for (target_bytes, _) in power_for_mutation_target_bytes {
                     res.insert(target_bytes, muts);
@@ -635,7 +654,11 @@ where
                     .metadata::<MapNeighboursFeedbackMetadata>()
                     .unwrap()
                     .covered_blocks;
-                for cov_idx in tc_meta_copy.uncovered_bbs_depending_on_bytes.get(target_bytes_pos).unwrap() {
+                for cov_idx in tc_meta_copy
+                    .uncovered_bbs_depending_on_bytes
+                    .get(target_bytes_pos)
+                    .unwrap()
+                {
                     if !covered.contains(&(cov_idx.0 as usize)) {
                         res = true;
                         break;
@@ -703,8 +726,9 @@ where
 
                 // Time is measured directly the `evaluate_input` function
                 let (untransformed, post) = input.try_transform_into(state).unwrap();
-                let (result, corpus_idx) =
-                    fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
+                let (result, corpus_idx) = fuzzer
+                    .evaluate_input(state, executor, manager, untransformed)
+                    .unwrap();
 
                 if result == ExecuteInputResult::Corpus {
                     let covered = &state
@@ -733,7 +757,10 @@ where
             for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
                 let bbs = &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos];
                 for bb_cov_map_idx in bbs {
-                    let count = df_meta.num_mutations_for_edge.get_mut(bb_cov_map_idx).unwrap();
+                    let count = df_meta
+                        .num_mutations_for_edge
+                        .get_mut(bb_cov_map_idx)
+                        .unwrap();
                     *count += *num_mutations;
                 }
             }
@@ -777,9 +804,10 @@ where
             }
             let muts = tc_meta_copy.mutations_tested_on_target_bytes[dependent_bytes];
             // if we've already tested every possible value for this edge...
-            if dependent_bytes.raw_ranges().len() == 1 && 
-                dependent_bytes.raw_ranges()[0].clone().count() == 1 && 
-                muts >= 256 {
+            if dependent_bytes.raw_ranges().len() == 1
+                && dependent_bytes.raw_ranges()[0].clone().count() == 1
+                && muts >= 256
+            {
                 continue;
             }
 
@@ -788,7 +816,8 @@ where
                 let muts = df_meta.num_mutations_for_edge.get(uncovered_bb).unwrap();
                 power += muts;
 
-                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes) {
+                if let Some(bytes_power) = power_for_mutation_target_bytes.get_mut(dependent_bytes)
+                {
                     *bytes_power += power;
                 } else {
                     power_for_mutation_target_bytes.insert(dependent_bytes.clone(), power);
@@ -805,9 +834,8 @@ where
             tc.input().as_ref().unwrap().clone()
         };
 
-        let mut mutator = StdScheduledMutator::with_max_stack_pow(
-            havoc_mutations_fixed_length(), 1
-        );
+        let mut mutator =
+            StdScheduledMutator::with_max_stack_pow(havoc_mutations_fixed_length(), 1);
 
         let mut mutated_ranges = HashSet::new();
 
@@ -830,13 +858,17 @@ where
                             break;
                         }
                     }
-                    res.unwrap_or_else(|| 
-                        panic!("Failed to find power {rand_val} from {:?}", power_for_mutation_target_bytes)
-                    )
+                    res.unwrap_or_else(|| {
+                        panic!(
+                            "Failed to find power {rand_val} from {:?}",
+                            power_for_mutation_target_bytes
+                        )
+                    })
                 };
 
                 if mutated_ranges.insert(bytes_for_mut_indexes.clone()) {
-                    if let Some(count) = mutations_for_target_bytes.get_mut(&bytes_for_mut_indexes) {
+                    if let Some(count) = mutations_for_target_bytes.get_mut(&bytes_for_mut_indexes)
+                    {
                         *count += 1;
                     } else {
                         mutations_for_target_bytes.insert(bytes_for_mut_indexes.clone(), 1);
@@ -844,7 +876,9 @@ where
                 }
 
                 // build a vec of the values of target bytes
-                let bytes_for_mut_vals: Vec<u8> = bytes_for_mut_indexes.to_list().into_iter()
+                let bytes_for_mut_vals: Vec<u8> = bytes_for_mut_indexes
+                    .to_list()
+                    .into_iter()
                     .map(|idx| mutated_input.bytes()[idx])
                     .collect();
 
@@ -853,9 +887,9 @@ where
                 let mutated = mutator.mutate(state, &mut sub_input).unwrap();
                 if mutated == MutationResult::Skipped {
                     // mark this as unmutated for the effort balancer?
-                    // not for now - there's a much higher chance of skipping 
+                    // not for now - there's a much higher chance of skipping
                     // small inputs (1 or 2 bytes); so we'd maybe spin our wheels
-                    // hammering those 
+                    // hammering those
                 }
                 let mutated_bytes = sub_input.bytes();
 
@@ -865,7 +899,7 @@ where
                     bytes[*dest_pos] = mutated_bytes[arr_idx];
                 }
             }
-            
+
             mark_feature_time!(state, PerfFeature::Mutate);
 
             let pre_covered = state
@@ -876,8 +910,9 @@ where
 
             // Time is measured directly the `evaluate_input` function
             let (untransformed, post) = mutated_input.try_transform_into(state).unwrap();
-            let (result, corpus_idx) =
-                fuzzer.evaluate_input(state, executor, manager, untransformed).unwrap();
+            let (result, corpus_idx) = fuzzer
+                .evaluate_input(state, executor, manager, untransformed)
+                .unwrap();
 
             if result == ExecuteInputResult::Corpus {
                 let post_covered = state
@@ -888,7 +923,11 @@ where
                 let novs = post_covered - pre_covered;
                 println!(
                     "Dataflow stage found a new corpus entry{}!",
-                    if novs > 0 { format!(" with {} novelties", novs) } else { format!("") }
+                    if novs > 0 {
+                        format!(" with {} novelties", novs)
+                    } else {
+                        format!("")
+                    }
                 );
             }
 
@@ -904,7 +943,10 @@ where
             for (target_bytes_pos, num_mutations) in &mutations_for_target_bytes {
                 let bbs = &tc_meta_copy.uncovered_bbs_depending_on_bytes[target_bytes_pos];
                 for bb_cov_map_idx in bbs {
-                    let count = df_meta.num_mutations_for_edge.get_mut(bb_cov_map_idx).unwrap();
+                    let count = df_meta
+                        .num_mutations_for_edge
+                        .get_mut(bb_cov_map_idx)
+                        .unwrap();
                     *count += *num_mutations;
                 }
             }
@@ -949,9 +991,11 @@ where
             });
         }
 
-        let covered = state.metadata::<MapNeighboursFeedbackMetadata>()
+        let covered = state
+            .metadata::<MapNeighboursFeedbackMetadata>()
             .unwrap()
-            .covered_blocks.len();
+            .covered_blocks
+            .len();
         let last_new = self.last_new_coverage_time;
         if last_new.is_none() || covered > last_new.unwrap().0 {
             self.last_new_coverage_time = Some((covered, std::time::Instant::now()));
@@ -961,8 +1005,10 @@ where
             return Ok(());
         };
 
-
-        if let Some(meta) = state.metadata_map_mut().get_mut::<DiscoveriesMutationTypeMetadata>() {
+        if let Some(meta) = state
+            .metadata_map_mut()
+            .get_mut::<DiscoveriesMutationTypeMetadata>()
+        {
             meta.current_mutation_type = DiscoveryMutationType::DataflowGuidedHavoc;
         }
 
@@ -992,30 +1038,34 @@ where
             drop(tc);
 
             let required_edges: Vec<usize> = covered_bbs_with_sibs;
-            let bytes_depended_on_by_bb = self.get_bytes_depended_on_by_edges(
-                fuzzer,
-                executor,
-                state,
-                manager,
-                &required_edges,
-            ).unwrap();
+            let bytes_depended_on_by_bb = self
+                .get_bytes_depended_on_by_edges(fuzzer, executor, state, manager, &required_edges)
+                .unwrap();
 
             let tc = state.corpus().get(idx).unwrap().borrow();
             let covered = &tc.metadata::<MapIndexesMetadata>().unwrap().list;
             let cfg_meta = state.metadata::<ControlFlowGraph>().unwrap();
 
-            let mut mutations_tested_on_target_bytes: HashMap<DependentBytes, usize> = HashMap::new();
-            let mut uncovered_bbs_depending_on_bytes: HashMap<DependentBytes, HashSet<CoverageMapIdx>> = HashMap::new();
+            let mut mutations_tested_on_target_bytes: HashMap<DependentBytes, usize> =
+                HashMap::new();
+            let mut uncovered_bbs_depending_on_bytes: HashMap<
+                DependentBytes,
+                HashSet<CoverageMapIdx>,
+            > = HashMap::new();
             let mut siblings_for_covered_bb = HashMap::new();
             for (edge, dependent_bytes) in &bytes_depended_on_by_bb {
-                let uncovered_siblings = cfg_meta.uncovered_siblings_for_bb(covered, CoverageMapIdx(*edge as u32));
+                let uncovered_siblings =
+                    cfg_meta.uncovered_siblings_for_bb(covered, CoverageMapIdx(*edge as u32));
                 siblings_for_covered_bb.insert(edge, uncovered_siblings.clone());
 
                 if let Some(edges) = uncovered_bbs_depending_on_bytes.get_mut(dependent_bytes) {
-                    for sib in uncovered_siblings { edges.insert(CoverageMapIdx(sib.0)); }
+                    for sib in uncovered_siblings {
+                        edges.insert(CoverageMapIdx(sib.0));
+                    }
                 } else {
                     uncovered_bbs_depending_on_bytes.insert(
-                        dependent_bytes.clone(), HashSet::from_iter(uncovered_siblings.iter().cloned())
+                        dependent_bytes.clone(),
+                        HashSet::from_iter(uncovered_siblings.iter().cloned()),
                     );
                     mutations_tested_on_target_bytes.insert(dependent_bytes.clone(), 0);
                 }
@@ -1027,7 +1077,12 @@ where
                 mutations_tested_on_target_bytes,
                 uncovered_bbs_depending_on_bytes,
             };
-            state.corpus().get(idx).unwrap().borrow_mut().add_metadata(meta);
+            state
+                .corpus()
+                .get(idx)
+                .unwrap()
+                .borrow_mut()
+                .add_metadata(meta);
 
             // Add any new neighbours to the effort tracker
             let uncovered_bbs_with_covered_sibs = {
@@ -1046,12 +1101,19 @@ where
         } else {
             drop(tc);
         }
-        
+
         mark_feature_time!(state, PerfFeature::ComputeDataflowDependencies);
 
         // return self.do_simple_mutate(fuzzer, state, executor, manager, num_mutations);
         // return self.distributed_mutate_mutli_dependency(fuzzer, state, executor, manager, num_mutations, idx);
-        return self.distributed_mutate_single_dependency(fuzzer, state, executor, manager, num_mutations, idx);
+        return self.distributed_mutate_single_dependency(
+            fuzzer,
+            state,
+            executor,
+            manager,
+            num_mutations,
+            idx,
+        );
     }
 
     fn restart_progress_should_run(

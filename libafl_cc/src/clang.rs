@@ -80,10 +80,9 @@ impl LLVMPasses {
             }
             LLVMPasses::DDG => {
                 PathBuf::from(env!("OUT_DIR")).join(format!("ddg-instr.{}", dll_extension()))
-            },
-            LLVMPasses::SanCovWithCFG => {
-                PathBuf::from(env!("OUT_DIR")).join(format!("SanitizerCoverage.{}", dll_extension()))
             }
+            LLVMPasses::SanCovWithCFG => PathBuf::from(env!("OUT_DIR"))
+                .join(format!("SanitizerCoverage.{}", dll_extension())),
         }
     }
 }

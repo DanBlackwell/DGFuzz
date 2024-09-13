@@ -3,10 +3,10 @@
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
+use core::ptr;
 #[rustversion::nightly]
 #[cfg(feature = "sancov_ngram4")]
 use core::simd::num::SimdUint;
-use core::ptr;
 
 #[cfg(any(feature = "sancov_ngram4", feature = "sancov_ctx"))]
 use libafl::executors::{hooks::ExecutorHook, HasObservers};
@@ -295,7 +295,9 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
     let mut index = 0;
     while start < stop {
         unsafe {
-            PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE.as_mut().unwrap()
+            PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE
+                .as_mut()
+                .unwrap()
                 .insert(index, *start as usize);
         }
         index += 1;
@@ -362,8 +364,11 @@ impl PcTableEntry {
     pub fn cov_map_idx(&self) -> usize {
         unsafe {
             **PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE
-                .as_ref().unwrap()
-                .get(&self.array_index).as_ref().unwrap()
+                .as_ref()
+                .unwrap()
+                .get(&self.array_index)
+                .as_ref()
+                .unwrap()
         }
     }
 }
@@ -372,7 +377,7 @@ impl PcTableEntry {
 /// Struct containing the information pulled from SanitizerCoverage's PC table
 pub struct SanCovPcTable {
     entries_sorted_addr: Vec<PcTableEntry>,
-    entry_for_address_cache: HashMap<usize, PcTableEntry>
+    entry_for_address_cache: HashMap<usize, PcTableEntry>,
 }
 
 impl SanCovPcTable {
@@ -387,7 +392,7 @@ impl SanCovPcTable {
             let entry = PcTableEntry {
                 addr: *iter,
                 flags: *(iter.wrapping_add(1)),
-                array_index
+                array_index,
             };
             iter = iter.wrapping_add(2);
             cov_sorted.push(entry);
@@ -399,7 +404,7 @@ impl SanCovPcTable {
 
         Self {
             entries_sorted_addr: addr_sorted,
-            entry_for_address_cache: HashMap::new()
+            entry_for_address_cache: HashMap::new(),
         }
     }
 
@@ -409,14 +414,16 @@ impl SanCovPcTable {
             return Some(entry.clone());
         }
 
-        let pos = self.entries_sorted_addr.binary_search_by(|probe| probe.addr().cmp(&address));
+        let pos = self
+            .entries_sorted_addr
+            .binary_search_by(|probe| probe.addr().cmp(&address));
         let entry = match pos {
             Ok(idx) => Some(self.entries_sorted_addr[idx].clone()),
             Err(idx) => {
-                if idx == 0 { 
-                    None 
-                } else { 
-                    Some(self.entries_sorted_addr[idx - 1].clone()) 
+                if idx == 0 {
+                    None
+                } else {
+                    Some(self.entries_sorted_addr[idx - 1].clone())
                 }
             }
         };

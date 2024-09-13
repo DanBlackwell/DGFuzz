@@ -982,10 +982,10 @@ impl From<PerfFeature> for usize {
             }
             PerfFeature::GetObjectivesInterestingAll => {
                 PerfFeature::GetObjectivesInterestingAll as usize
-            },
+            }
             PerfFeature::ComputeDataflowDependencies => {
                 PerfFeature::ComputeDataflowDependencies as usize
-            },
+            }
             PerfFeature::Count => PerfFeature::Count as usize,
         }
     }

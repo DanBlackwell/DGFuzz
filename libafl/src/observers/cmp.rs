@@ -1,22 +1,29 @@
 //! The `CmpObserver` provides access to the logged values of CMP instructions
 
 use alloc::{borrow::Cow, vec::Vec};
+use core::{fmt::Debug, marker::PhantomData};
 use memchr::memmem;
-use core::{
-    fmt::Debug,
-    marker::PhantomData,
-};
 use std::borrow::ToOwned;
 
 use c2rust_bitfields::BitfieldStruct;
 use hashbrown::{HashMap, HashSet};
 use libafl_bolts::{
-    dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, 
-    ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
+    dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata},
+    ownedref::OwnedRefMut,
+    serdeany::SerdeAny,
+    Named,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::{corpus::Corpus, executors::ExitKind, inputs::{HasMutatorBytes, UsesInput}, observers::Observer, state::HasCorpus, Error, HasMetadata};
 use crate::prelude::MapNeighboursFeedbackMetadata;
+use crate::{
+    corpus::Corpus,
+    executors::ExitKind,
+    inputs::{HasMutatorBytes, UsesInput},
+    observers::Observer,
+    state::HasCorpus,
+    Error, HasMetadata,
+};
 
 /// Generic metadata trait for use in a `CmpObserver`, which adds comparisons from a `CmpObserver`
 /// primarily intended for use with `AFLppCmpValuesMetadata` or `CmpValuesMetadata`
@@ -36,7 +43,13 @@ where
     /// Add comparisons to a metadata from a `CmpObserver`. `cmp_map` is mutable in case
     /// it is needed for a custom map, but this is not utilized for `CmpObserver` or
     /// `AFLppCmpLogObserver`.
-    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, cmp_observer_data: Self::Data, state: &S);
+    fn add_from(
+        &mut self,
+        usable_count: usize,
+        cmp_map: &mut CM,
+        cmp_observer_data: Self::Data,
+        state: &S,
+    );
 }
 
 /// Compare values collected during a run
@@ -76,7 +89,6 @@ impl CmpValues {
         }
     }
 }
-
 
 /// A state metadata holding a list of values logged from comparisons
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Hash, Eq, PartialEq)]
@@ -136,7 +148,11 @@ impl CmpValuesMetadata {
     /// Creates a new [`struct@CmpValuesMetadata`]
     #[must_use]
     pub fn new() -> Self {
-        Self { list: vec![], map: HashMap::new(), targeted_replacements: vec![] }
+        Self {
+            list: vec![],
+            map: HashMap::new(),
+            targeted_replacements: vec![],
+        }
     }
 
     fn populate_targeted_replacements<S>(&mut self, state: &S)
@@ -144,7 +160,9 @@ impl CmpValuesMetadata {
         S: HasMetadata + HasCorpus,
         S::Input: HasMutatorBytes,
     {
-        if self.list.is_empty() { return; }
+        if self.list.is_empty() {
+            return;
+        }
 
         let curr_idx = state.corpus().current().unwrap();
         let tc = state.corpus().get(curr_idx).unwrap().borrow();
@@ -154,35 +172,64 @@ impl CmpValuesMetadata {
         let dn_meta: &TestcaseDirectNeighboursMetadata = tc.metadata_map().get().unwrap();
         let input = tc.input().as_ref().unwrap();
 
-        let full_neighbours_meta = state
-            .metadata::<MapNeighboursFeedbackMetadata>()
-            .unwrap();
+        let full_neighbours_meta = state.metadata::<MapNeighboursFeedbackMetadata>().unwrap();
         let covered_blocks = full_neighbours_meta.covered_blocks.clone();
 
         let mut all_replacements: HashSet<TargetedCmpValReplace> = HashSet::new();
 
         for (byte_indexes, uncovered_bbs) in &df_meta.uncovered_bbs_depending_on_bytes {
-            if byte_indexes.raw_ranges().is_empty() { continue; }
+            if byte_indexes.raw_ranges().is_empty() {
+                continue;
+            }
             for bb_cov_map_idx in uncovered_bbs {
                 // filter out any globally covered edges
-                if covered_blocks.contains(&(bb_cov_map_idx.0 as usize)) { continue; }
-                let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) 
-                    else { continue; };
-                let Some(cmpvals) = self.map.get(&(parent.0 as usize)) else { continue; };
-                if cmpvals.is_empty() { continue; }
+                if covered_blocks.contains(&(bb_cov_map_idx.0 as usize)) {
+                    continue;
+                }
+                let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) else {
+                    continue;
+                };
+                let Some(cmpvals) = self.map.get(&(parent.0 as usize)) else {
+                    continue;
+                };
+                if cmpvals.is_empty() {
+                    continue;
+                }
 
-                let mut trimmed_cmps = vec![]; 
+                let mut trimmed_cmps = vec![];
                 for cmp_values in cmpvals {
                     // convert to vecs
                     let (is_num, max_trim, arg1_is_const, cmp1, cmp2) = match cmp_values {
                         // makes no sense to strip u8 or u16s
-                        CmpValues::U8((arg1_const, s1, s2))    => (true,  0, arg1_const, vec![*s1], vec![*s2]),
-                        CmpValues::U16((arg1_const, s1, s2))   => (true,  0, arg1_const, s1.to_be_bytes().to_vec(), s2.to_be_bytes().to_vec()),
+                        CmpValues::U8((arg1_const, s1, s2)) => {
+                            (true, 0, arg1_const, vec![*s1], vec![*s2])
+                        }
+                        CmpValues::U16((arg1_const, s1, s2)) => (
+                            true,
+                            0,
+                            arg1_const,
+                            s1.to_be_bytes().to_vec(),
+                            s2.to_be_bytes().to_vec(),
+                        ),
                         // maybe a 24-bit int stuffed into a 32-bit
-                        CmpValues::U32((arg1_const, s1, s2))   => (true,  1, arg1_const, s1.to_be_bytes().to_vec(), s2.to_be_bytes().to_vec()),
+                        CmpValues::U32((arg1_const, s1, s2)) => (
+                            true,
+                            1,
+                            arg1_const,
+                            s1.to_be_bytes().to_vec(),
+                            s2.to_be_bytes().to_vec(),
+                        ),
                         // maybe a 40-56-bit int stuffed into a 64-bit
-                        CmpValues::U64((arg1_const, s1, s2))   => (true,  3, arg1_const, s1.to_be_bytes().to_vec(), s2.to_be_bytes().to_vec()),
-                        CmpValues::Bytes((arg1_const, s1, s2)) => (false, s1.len(), arg1_const, s1.to_owned(), s2.to_owned())
+                        CmpValues::U64((arg1_const, s1, s2)) => (
+                            true,
+                            3,
+                            arg1_const,
+                            s1.to_be_bytes().to_vec(),
+                            s2.to_be_bytes().to_vec(),
+                        ),
+                        CmpValues::Bytes((arg1_const, s1, s2)) => {
+                            (false, s1.len(), arg1_const, s1.to_owned(), s2.to_owned())
+                        }
                     };
 
                     // strip leading and trailing zeroes
@@ -198,18 +245,32 @@ impl CmpValuesMetadata {
                         if cmp1[end - 1] != 0 || cmp1[end - 1] != cmp2[end - 1] {
                             break;
                         }
-                        if end == 1 { break; } else { end -= 1; }
+                        if end == 1 {
+                            break;
+                        } else {
+                            end -= 1;
+                        }
                     }
 
                     if start > max_trim {
                         start = max_trim;
                     }
-                    trimmed_cmps.push((is_num, arg1_is_const, cmp1[start..].to_vec(), cmp2[start..].to_vec()));
+                    trimmed_cmps.push((
+                        is_num,
+                        arg1_is_const,
+                        cmp1[start..].to_vec(),
+                        cmp2[start..].to_vec(),
+                    ));
                     if cmp1.len() - end > 0 {
                         if cmp1.len() - end > max_trim {
                             end = cmp1.len() - max_trim;
                         }
-                        trimmed_cmps.push((is_num, arg1_is_const, cmp1[..end].to_vec(), cmp2[..end].to_vec()));
+                        trimmed_cmps.push((
+                            is_num,
+                            arg1_is_const,
+                            cmp1[..end].to_vec(),
+                            cmp2[..end].to_vec(),
+                        ));
                     }
                 }
 
@@ -224,7 +285,9 @@ impl CmpValuesMetadata {
                     // populate a complete list of matches for this cmpval in this edges dependent bytes
                     for (is_num, arg1_is_const, cmp1, cmp2) in trimmed_cmps.clone() {
                         // skip boring replacements
-                        if cmp1.len() < 1 { continue; }
+                        if cmp1.len() < 1 {
+                            continue;
+                        }
 
                         let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
                         let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
@@ -234,45 +297,61 @@ impl CmpValuesMetadata {
                                 // collect up matches for cmpval side 1
                                 memmem::find_iter(&byte_vals, &cmp1)
                                     .map(|idx| TargetedCmpValReplace {
-                                        input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
-                                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                        input_byte_indexes: expanded_range[idx..(idx + cmp1.len())]
+                                            .to_vec(),
+                                        input_byte_values: byte_vals[idx..(idx + cmp1.len())]
+                                            .to_vec(),
                                         replacement_byte_values: cmp2.clone(),
-                                        is_little_endian: false
+                                        is_little_endian: false,
                                     })
-                                    .for_each(|v| { all_replacements.insert(v); });
+                                    .for_each(|v| {
+                                        all_replacements.insert(v);
+                                    });
 
                                 // if it's a palindrome we'll have duplicate matches in either direction
                                 if is_num && cmp1 != rev1 {
                                     memmem::find_iter(&byte_vals, &rev1)
                                         .map(|idx| TargetedCmpValReplace {
-                                            input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
-                                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                            input_byte_indexes: expanded_range
+                                                [idx..(idx + cmp1.len())]
+                                                .to_vec(),
+                                            input_byte_values: byte_vals[idx..(idx + cmp1.len())]
+                                                .to_vec(),
                                             replacement_byte_values: rev2.clone(),
-                                            is_little_endian: true
+                                            is_little_endian: true,
                                         })
-                                        .for_each(|v| { all_replacements.insert(v); });
+                                        .for_each(|v| {
+                                            all_replacements.insert(v);
+                                        });
                                 }
                             }
 
                             // collect up matches for cmpval side 2
                             memmem::find_iter(&byte_vals, &cmp2)
                                 .map(|idx| TargetedCmpValReplace {
-                                    input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
+                                    input_byte_indexes: expanded_range[idx..(idx + cmp1.len())]
+                                        .to_vec(),
                                     input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
                                     replacement_byte_values: cmp1.clone(),
-                                    is_little_endian: false
+                                    is_little_endian: false,
                                 })
-                                .for_each(|v| { all_replacements.insert(v); });
+                                .for_each(|v| {
+                                    all_replacements.insert(v);
+                                });
                             // if it's a palindrome we'll have duplicate matches in either direction
                             if is_num && cmp2 != rev2 {
                                 memmem::find_iter(&byte_vals, &rev2)
                                     .map(|idx| TargetedCmpValReplace {
-                                        input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
-                                        input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                        input_byte_indexes: expanded_range[idx..(idx + cmp1.len())]
+                                            .to_vec(),
+                                        input_byte_values: byte_vals[idx..(idx + cmp1.len())]
+                                            .to_vec(),
                                         replacement_byte_values: rev1.clone(),
-                                        is_little_endian: true
+                                        is_little_endian: true,
                                     })
-                                    .for_each(|v| { all_replacements.insert(v); });
+                                    .for_each(|v| {
+                                        all_replacements.insert(v);
+                                    });
                             }
                         }
 
@@ -280,23 +359,30 @@ impl CmpValuesMetadata {
                             let (mut cmp1_matched, mut cmp2_matched) = (false, false);
                             for slice_len in 1..=core::cmp::min(byte_vals.len(), cmp1.len()) {
                                 let byte_vals_start = byte_vals.len() - slice_len;
-                                if !arg1_is_const && !cmp1_matched && cmp1[..slice_len] == byte_vals[byte_vals_start..] {
+                                if !arg1_is_const
+                                    && !cmp1_matched
+                                    && cmp1[..slice_len] == byte_vals[byte_vals_start..]
+                                {
                                     cmp1_matched = true;
                                     all_replacements.insert(TargetedCmpValReplace {
-                                        input_byte_indexes: expanded_range[byte_vals_start..].to_vec(),
+                                        input_byte_indexes: expanded_range[byte_vals_start..]
+                                            .to_vec(),
                                         input_byte_values: byte_vals[byte_vals_start..].to_vec(),
                                         replacement_byte_values: cmp2[..slice_len].to_vec(),
-                                        is_little_endian: false
+                                        is_little_endian: false,
                                     });
                                 }
 
-                                if !cmp2_matched && cmp2[..slice_len] == byte_vals[byte_vals_start..] {
+                                if !cmp2_matched
+                                    && cmp2[..slice_len] == byte_vals[byte_vals_start..]
+                                {
                                     cmp2_matched = true;
                                     all_replacements.insert(TargetedCmpValReplace {
-                                        input_byte_indexes: expanded_range[byte_vals_start..].to_vec(),
+                                        input_byte_indexes: expanded_range[byte_vals_start..]
+                                            .to_vec(),
                                         input_byte_values: byte_vals[byte_vals_start..].to_vec(),
                                         replacement_byte_values: cmp1[..slice_len].to_vec(),
-                                        is_little_endian: false
+                                        is_little_endian: false,
                                     });
                                 }
                             }
@@ -313,8 +399,8 @@ impl CmpValuesMetadata {
 impl<'a, CM, S> CmpObserverMetadata<'a, CM, S> for CmpValuesMetadata
 where
     CM: CmpMap,
-        S: HasMetadata + HasCorpus,
-        S::Input: HasMutatorBytes,
+    S: HasMetadata + HasCorpus,
+    S::Input: HasMutatorBytes,
 {
     type Data = bool;
 
@@ -323,8 +409,7 @@ where
         Self::new()
     }
 
-    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data, state: &S) 
-    {
+    fn add_from(&mut self, usable_count: usize, cmp_map: &mut CM, _: Self::Data, state: &S) {
         self.list.clear();
         self.map.clear();
         self.targeted_replacements.clear();
@@ -376,9 +461,7 @@ where
                 if !self.map.contains_key(&cov_map_idx) {
                     self.map.insert(cov_map_idx, vec![]);
                 }
-                let map_vals = self.map
-                    .get_mut(&cov_map_idx)
-                    .unwrap();
+                let map_vals = self.map.get_mut(&cov_map_idx).unwrap();
 
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
@@ -450,7 +533,9 @@ where
     where
         S: HasMetadata + HasCorpus,
     {
-        let mut meta = state.metadata_map_mut().remove::<M>()
+        let mut meta = state
+            .metadata_map_mut()
+            .remove::<M>()
             .map_or_else(|| M::new_metadata(), |x| *x);
         // let mut meta = M::new_metadata();
 
