@@ -1,6 +1,5 @@
 use alloc::{borrow::Cow, vec::Vec};
 use core::{fmt::Debug, marker::PhantomData};
-use hashbrown::HashSet;
 
 use libafl::{
     executors::ExitKind,

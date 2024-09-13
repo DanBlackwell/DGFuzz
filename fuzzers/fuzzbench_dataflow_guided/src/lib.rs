@@ -37,9 +37,10 @@ use libafl::{
     state::{HasCorpus, StdState},
     Error, HasMetadata,
 };
+#[allow(unused_imports)]
+use libafl_bolts::os::dup2;
 use libafl_bolts::{
     current_time,
-    os::dup2,
     prelude::OwnedMutSlice,
     rands::StdRand,
     shmem::{ShMem, ShMemMetadata, ShMemProvider, StdShMemProvider},
@@ -444,7 +445,7 @@ fn fuzz(
                 let mut buffer = Vec::new();
                 file.read_to_end(&mut buffer)?;
                 dfsan_cfg.parse_from_buf(&buffer);
-                let mapping = control_flow_graph.produce_mapping_to_alt_cfg(&dfsan_cfg);
+                let _mapping = control_flow_graph.produce_mapping_to_alt_cfg(&dfsan_cfg);
             }
 
             state.add_metadata(control_flow_graph);
@@ -473,8 +474,8 @@ fn fuzz(
     // Remove target output (logs still survive)
     #[cfg(unix)]
     {
-        let file_null = File::open("/dev/null")?;
-        let null_fd = file_null.as_raw_fd();
+        // let file_null = File::open("/dev/null")?;
+        // let null_fd = file_null.as_raw_fd();
         // dup2(null_fd, io::stdout().as_raw_fd())?;
         if std::env::var("LIBAFL_FUZZBENCH_DEBUG").is_err() {
             // dup2(null_fd, io::stderr().as_raw_fd())?;

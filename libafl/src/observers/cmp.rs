@@ -11,7 +11,7 @@ use std::borrow::ToOwned;
 use c2rust_bitfields::BitfieldStruct;
 use hashbrown::{HashMap, HashSet};
 use libafl_bolts::{
-    dataflow_metadata::{CoverageMapIdx, TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, 
+    dataflow_metadata::{TestcaseDataflowMetadata, TestcaseDirectNeighboursMetadata}, 
     ownedref::OwnedRefMut, serdeany::SerdeAny, Named};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 

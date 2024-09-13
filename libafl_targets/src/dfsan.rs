@@ -24,10 +24,10 @@ use libafl::{
         cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata,
     }, inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput}, mark_feature_time, mutators::{
         BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
-        ByteInterestingMutator, ByteNegMutator, ByteRandMutator, BytesCopyMutator,
-        BytesRandSetMutator, BytesSetMutator, BytesSwapMutator, DwordAddMutator,
-        DwordInterestingMutator, MutationResult, Mutator, QwordAddMutator, StdScheduledMutator,
-        WordAddMutator, WordInterestingMutator,
+        ByteNegMutator, ByteRandMutator,
+        BytesRandSetMutator, DwordAddMutator,
+        MutationResult, Mutator, QwordAddMutator, StdScheduledMutator,
+        WordAddMutator,
     }, observers::{hitcount_map::HitcountsMapObserver, map::StdMapObserver, TimeObserver}, prelude::{DiscoveriesMutationTypeMetadata, DiscoveryMutationType}, stages::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
@@ -406,6 +406,7 @@ where
         Ok(condensed)
     }
 
+    #[allow(dead_code)]
     fn do_simple_mutate(
         &mut self,
         fuzzer: &mut Z,
@@ -744,6 +745,7 @@ where
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn distributed_mutate_mutli_dependency(
         &mut self,
         fuzzer: &mut Z,
@@ -815,7 +817,7 @@ where
             start_timer!(state);
 
             let mut mutated_input = original_input.clone();
-            for mutation_num in 0..num_sub_mutations {
+            for _mutation_num in 0..num_sub_mutations {
                 // select a set of dependent bytes to apply a mutation to
                 let bytes_for_mut_indexes: DependentBytes = {
                     let mut res = None;
@@ -955,7 +957,7 @@ where
             self.last_new_coverage_time = Some((covered, std::time::Instant::now()));
         }
 
-        let Some((corpus_id, found_time)) = last_new else {
+        let Some((_corpus_id, found_time)) = last_new else {
             return Ok(());
         };
 
@@ -965,9 +967,6 @@ where
         }
 
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
-
-        let full_neighbours_meta = state.metadata::<MapNeighboursFeedbackMetadata>().unwrap();
-        let covered_blocks = full_neighbours_meta.covered_blocks.clone();
 
         let idx = state.corpus().current().unwrap();
         let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
@@ -981,8 +980,6 @@ where
             if found_time.elapsed() < std::time::Duration::from_secs(5) {
                 return Ok(());
             }
-
-            let start = std::time::Instant::now();
 
             let covered_bbs_with_sibs: Vec<usize> = tc
                 .metadata_mut::<TestcaseDirectNeighboursMetadata>()
@@ -1015,7 +1012,7 @@ where
                 siblings_for_covered_bb.insert(edge, uncovered_siblings.clone());
 
                 if let Some(edges) = uncovered_bbs_depending_on_bytes.get_mut(dependent_bytes) {
-                    for sib in uncovered_siblings { edges.insert(CoverageMapIdx(sib.0 as u32)); }
+                    for sib in uncovered_siblings { edges.insert(CoverageMapIdx(sib.0)); }
                 } else {
                     uncovered_bbs_depending_on_bytes.insert(
                         dependent_bytes.clone(), HashSet::from_iter(uncovered_siblings.iter().cloned())

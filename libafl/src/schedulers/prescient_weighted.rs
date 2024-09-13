@@ -344,7 +344,7 @@ where
             return Err(Error::empty(String::from("No entries in corpus")));
         }
 
-        let pick_random = state.rand_mut().below(100) == 0;
+        let pick_random = state.rand_mut().below(10) == 0;
         let rand_idx = {
             let corp = state.corpus().count();
             let idx = state.rand_mut().below(corp);
@@ -357,7 +357,7 @@ where
         let time_since_recalc = ts_now - meta.last_recalc_time;
         let last_duration = meta.last_recalc_duration;
 
-        if (time_since_recalc >= 25 * last_duration) ||
+        if (time_since_recalc >= 100 * last_duration) ||
             (time_since_recalc >= 10 * last_duration && meta.new_corpus_entry)
         {
             // Don't spend more than 10% of the fuzzer time recalculating these stats - sure

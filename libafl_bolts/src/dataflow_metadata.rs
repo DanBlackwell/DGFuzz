@@ -1,8 +1,7 @@
 use serde::{Serialize, Deserialize};
 use hashbrown::{HashMap, HashSet};
 use crate::Vec;
-use alloc::rc::Rc;
-use core::{borrow::Borrow, ops::Range};
+use core::ops::Range;
 
 /// A wrapper for u32 indicating the Coverage map index for a basic block / instruction
 #[derive(Hash,Copy,Clone,Debug,Eq,PartialEq,Serialize,Deserialize)]
@@ -38,15 +37,18 @@ pub struct TestcaseDirectNeighboursMetadata {
 crate::impl_serdeany!(TestcaseDirectNeighboursMetadata);
 
 #[derive(Clone,Debug,Eq,Hash,PartialEq,Serialize,Deserialize)]
+/// Struct containing a set of bytes depended on by a branch - internally uses a list of Ranges to save mem
 pub struct DependentBytes { list: Vec<Range<usize>> }
 
 impl DependentBytes {
+    /// Construct a `DependentBytes` struct from an unsorted list of `usize`
     pub fn from_list(list: &[usize]) -> Self {
         let mut sorted = list.to_vec();
         sorted.sort();
         Self::from_sorted_vec(&sorted)
     }
 
+    /// Construct a `DependentBytes` struct from a sorted `Vec<usize>`
     pub fn from_sorted_vec(sorted_vec: &Vec<usize>) -> Self {
         let mut deps = vec![];
         let mut start_idx = None;
@@ -70,6 +72,7 @@ impl DependentBytes {
         Self { list: deps }
     }
 
+    /// Flatten out the internal ranges into a list of indexes
     pub fn to_list(&self) -> Vec<usize> {
         let mut res = vec![];
         for range in &self.list {
@@ -80,6 +83,7 @@ impl DependentBytes {
         res
     }
 
+    /// Get a reference to the raw underlying ranges of indexes
     pub fn raw_ranges(&self) -> &Vec<Range<usize>> {
         &self.list
     }

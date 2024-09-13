@@ -316,7 +316,7 @@ impl ControlFlowGraph {
                 for &instr_idx in &bb.instrumented_instructions_cov_map_idxs {
                     self.edge_with_coverage_map_idx.insert(instr_idx, index);
                 }
-                edges_in_func.push(index as u32);
+                edges_in_func.push(index);
                 self.all_edges.push(bb);
             }
 
@@ -888,7 +888,6 @@ impl ControlFlowGraph {
     pub fn direct_neighbours_for_edges_in_path(
         &mut self, 
         covered_indexes: &[usize],
-        all_coverage_map_indexes: &HashSet<usize>,
     ) -> TestcaseDirectNeighboursMetadata {
         let mut locally_uncovered_bbs_that_have_covered_siblings = HashSet::new();
         let mut covered_bbs_that_have_locally_uncovered_siblings = HashSet::new();
@@ -932,6 +931,7 @@ impl ControlFlowGraph {
         }
     }
 
+    /// Get a `HashSet` containing `CoverageMapIdx`s for all uncovered siblings for a given edge index `sought_bb`
     pub fn uncovered_siblings_for_bb(
         &self,
         covered_indexes: &[usize],

@@ -286,7 +286,7 @@ mod linux {
         let result = unsafe {
             sched_setaffinity(
                 0, // Defaults to current thread
-                mem::size_of::<cpu_set_t>(),
+                size_of::<cpu_set_t>(),
                 &set,
             )
         };
@@ -305,7 +305,7 @@ mod linux {
         let result = unsafe {
             sched_getaffinity(
                 0, // Defaults to current thread
-                mem::size_of::<cpu_set_t>(),
+                size_of::<cpu_set_t>(),
                 &mut set,
             )
         };

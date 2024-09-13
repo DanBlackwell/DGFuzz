@@ -9,7 +9,6 @@ use core::{
     ops::{Add, AddAssign, Deref},
     slice::Iter,
 };
-use std::borrow::ToOwned;
 #[cfg(feature = "std")]
 use std::{
     fs::File,
@@ -17,7 +16,6 @@ use std::{
     path::Path,
 };
 
-use memchr::memmem;
 use hashbrown::HashSet;
 use libafl_bolts::{rands::Rand, AsSlice};
 use serde::{Deserialize, Serialize};

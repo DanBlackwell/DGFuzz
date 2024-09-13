@@ -673,9 +673,7 @@ where
 
                 let indexes_meta = testcase.metadata::<MapIndexesMetadata>().unwrap();
                 let indexes_set: HashSet<usize> = indexes_meta.list.clone().into_iter().collect();
-                let dn_meta = cfg_metadata.direct_neighbours_for_edges_in_path(
-                    &indexes_meta.list, &indexes_set
-                );
+                let dn_meta = cfg_metadata.direct_neighbours_for_edges_in_path(&indexes_meta.list);
                 testcase.add_metadata(dn_meta);
 
                 let meta = MapUncoveredNeighboursMetadata { 

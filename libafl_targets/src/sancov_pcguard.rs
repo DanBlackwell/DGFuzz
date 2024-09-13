@@ -6,7 +6,7 @@ use hashbrown::HashMap;
 #[rustversion::nightly]
 #[cfg(feature = "sancov_ngram4")]
 use core::simd::num::SimdUint;
-use core::{mem, ptr, slice};
+use core::ptr;
 
 #[cfg(any(feature = "sancov_ngram4", feature = "sancov_ctx"))]
 use libafl::executors::{hooks::ExecutorHook, HasObservers};
@@ -215,7 +215,8 @@ extern "C" {
     pub static mut __afl_prev_ctx: u32;
 }
 
-static mut pc_guard_array_index_to_guard_value: Option<HashMap<usize, usize>> = None;
+/// HashMap from pc_guard array index, to the actual guard value at that index
+static mut PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE: Option<HashMap<usize, usize>> = None;
 
 /// Callback for sancov `pc_guard` - usually called by `llvm` on each block or edge.
 ///
@@ -286,7 +287,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
     }
 
     unsafe {
-        pc_guard_array_index_to_guard_value = Some(HashMap::new());
+        PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE = Some(HashMap::new());
     }
     let mut seen = vec![];
     let mut set_seen = HashSet::new();
@@ -294,7 +295,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
     let mut index = 0;
     while start < stop {
         unsafe {
-            pc_guard_array_index_to_guard_value.as_mut().unwrap()
+            PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE.as_mut().unwrap()
                 .insert(index, *start as usize);
         }
         index += 1;
@@ -317,6 +318,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(mut start: *mut u32
 
 static mut PCS_BEG: *const usize = ptr::null();
 static mut PCS_END: *const usize = ptr::null();
+/// PC Table as acquired from SanitizerCoverage
 pub static mut SANCOV_PC_TABLE: Option<SanCovPcTable> = None;
 
 #[no_mangle]
@@ -359,7 +361,7 @@ impl PcTableEntry {
     #[must_use]
     pub fn cov_map_idx(&self) -> usize {
         unsafe {
-            **pc_guard_array_index_to_guard_value
+            **PC_GUARD_ARRAY_INDEX_TO_GUARD_VALUE
                 .as_ref().unwrap()
                 .get(&self.array_index).as_ref().unwrap()
         }
@@ -367,8 +369,8 @@ impl PcTableEntry {
 }
 
 #[derive(Debug)]
+/// Struct containing the information pulled from SanitizerCoverage's PC table
 pub struct SanCovPcTable {
-    entries_sorted_cov_map_idx: Vec<PcTableEntry>,
     entries_sorted_addr: Vec<PcTableEntry>,
     entry_for_address_cache: HashMap<usize, PcTableEntry>
 }
@@ -396,12 +398,12 @@ impl SanCovPcTable {
         addr_sorted.sort_by(|a, b| a.addr().partial_cmp(&b.addr()).unwrap());
 
         Self {
-            entries_sorted_cov_map_idx: cov_sorted,
             entries_sorted_addr: addr_sorted,
             entry_for_address_cache: HashMap::new()
         }
     }
 
+    /// Get the `PcTableEntry` (from SanCov's PC Table) for a given address (probably the return value of a callback)
     pub fn entry_containing_address(&mut self, address: usize) -> Option<PcTableEntry> {
         if let Some(entry) = self.entry_for_address_cache.get(&address) {
             return Some(entry.clone());
