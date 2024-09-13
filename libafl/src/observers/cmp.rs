@@ -111,7 +111,7 @@ pub struct CmpValuesMetadata {
     pub list: Vec<CmpValues>,
     /// A `HashMap` from prev_edge_idx to list of `CmpValues`
     #[serde(skip)]
-    pub map: HashMap<usize, Vec<CmpValues>>,
+    pub map: HashMap<usize, (bool, Vec<CmpValues>)>,
     /// A `list` of possible DFSan targeted replacements
     #[serde(skip)]
     pub targeted_replacements: Vec<TargetedCmpValReplace>,
@@ -168,7 +168,7 @@ impl CmpValuesMetadata {
                 if covered_blocks.contains(&(bb_cov_map_idx.0 as usize)) { continue; }
                 let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) 
                     else { continue; };
-                let Some(cmpvals) = self.map.get(&(parent.0 as usize)) else { continue; };
+                let Some((arg1_is_const, cmpvals)) = self.map.get(&(parent.0 as usize)) else { continue; };
                 if cmpvals.is_empty() { continue; }
 
                 let mut trimmed_cmps = vec![]; 
@@ -226,29 +226,32 @@ impl CmpValuesMetadata {
                         // skip boring replacements
                         if cmp1.len() < 1 { continue; }
 
-                        if cmp1.len() <= byte_vals.len() {
-                            // collect up matches for cmpval side 1
-                            memmem::find_iter(&byte_vals, &cmp1)
-                                .map(|idx| TargetedCmpValReplace {
-                                    input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
-                                    input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                    replacement_byte_values: cmp2.clone(),
-                                    is_little_endian: false
-                                })
-                                .for_each(|v| { all_replacements.insert(v); });
+                        let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
+                        let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
 
-                            let rev1: Vec<u8> = cmp1.clone().into_iter().rev().collect();
-                            let rev2: Vec<u8> = cmp2.clone().into_iter().rev().collect();
-                            // if it's a palindrome we'll have duplicate matches in either direction
-                            if is_num && cmp1 != rev1 {
-                                memmem::find_iter(&byte_vals, &rev1)
+                        if cmp1.len() <= byte_vals.len() {
+                            if !arg1_is_const {
+                                // collect up matches for cmpval side 1
+                                memmem::find_iter(&byte_vals, &cmp1)
                                     .map(|idx| TargetedCmpValReplace {
                                         input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
                                         input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
-                                        replacement_byte_values: rev2.clone(),
-                                        is_little_endian: true
+                                        replacement_byte_values: cmp2.clone(),
+                                        is_little_endian: false
                                     })
                                     .for_each(|v| { all_replacements.insert(v); });
+
+                                // if it's a palindrome we'll have duplicate matches in either direction
+                                if is_num && cmp1 != rev1 {
+                                    memmem::find_iter(&byte_vals, &rev1)
+                                        .map(|idx| TargetedCmpValReplace {
+                                            input_byte_indexes: expanded_range[idx..(idx + cmp1.len())].to_vec(),
+                                            input_byte_values: byte_vals[idx..(idx + cmp1.len())].to_vec(),
+                                            replacement_byte_values: rev2.clone(),
+                                            is_little_endian: true
+                                        })
+                                        .for_each(|v| { all_replacements.insert(v); });
+                                }
                             }
 
                             // collect up matches for cmpval side 2
@@ -277,7 +280,7 @@ impl CmpValuesMetadata {
                             let (mut cmp1_matched, mut cmp2_matched) = (false, false);
                             for slice_len in 1..=core::cmp::min(byte_vals.len(), cmp1.len()) {
                                 let byte_vals_start = byte_vals.len() - slice_len;
-                                if !cmp1_matched && cmp1[..slice_len] == byte_vals[byte_vals_start..] {
+                                if !arg1_is_const && !cmp1_matched && cmp1[..slice_len] == byte_vals[byte_vals_start..] {
                                     cmp1_matched = true;
                                     all_replacements.insert(TargetedCmpValReplace {
                                         input_byte_indexes: expanded_range[byte_vals_start..].to_vec(),
@@ -371,16 +374,17 @@ where
 
                 let cov_map_idx = cmp_map.cov_map_idx_for(i);
                 if !self.map.contains_key(&cov_map_idx) {
-                    self.map.insert(cov_map_idx, vec![]);
+                    let arg1_is_const = cmp_map.arg1_is_const_for(i);
+                    self.map.insert(cov_map_idx, (arg1_is_const, vec![]));
                 }
-                let vals = self.map
+                let map_vals = self.map
                     .get_mut(&cov_map_idx)
                     .unwrap();
 
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
                         self.list.push(val.clone());
-                        vals.push(val);
+                        map_vals.1.push(val);
                     }
                 }
             }
@@ -403,6 +407,9 @@ pub trait CmpMap: Debug {
 
     /// Get the coverage map index for the cmp at `idx`
     fn cov_map_idx_for(&self, idx: usize) -> usize;
+
+    /// Is arg1 const for this `idx`?
+    fn arg1_is_const_for(&self, idx: usize) -> bool;
 
     /// Get the number of executions for a cmp
     fn executions_for(&self, idx: usize) -> usize;

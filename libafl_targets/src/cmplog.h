@@ -30,6 +30,7 @@
 typedef struct CmpLogHeader {
   uintptr_t return_addr;
   uint16_t hits;
+  uint8_t  arg1_is_const;
   uint8_t  shape;
   uint8_t  kind;
 } CmpLogHeader;
@@ -108,7 +109,7 @@ extern uint32_t libafl_last_seen_edge_idx;
 // cmplog_routines_checked_extended
 
 static inline void cmplog_instructions_checked(uintptr_t k, uint8_t shape,
-                                               uint64_t arg1, uint64_t arg2) {
+                                               uint64_t arg1, uint64_t arg2, uint8_t arg1_is_const) {
   if (!libafl_cmplog_enabled) { return; }
   libafl_cmplog_enabled = false;
 
@@ -124,6 +125,7 @@ static inline void cmplog_instructions_checked(uintptr_t k, uint8_t shape,
       libafl_cmplog_map_ptr->headers[k].shape = shape;
     }
   }
+  libafl_cmplog_map_ptr->headers[k].arg1_is_const = arg1_is_const;
   libafl_cmplog_map_ptr->headers[k].return_addr = RETADDR;
 
   hits &= CMPLOG_MAP_H - 1;
@@ -151,6 +153,7 @@ static inline void cmplog_instructions_extended_checked(
       libafl_cmplog_map_extended_ptr->headers[k].shape = shape;
     }
   }
+  libafl_cmplog_map_extended_ptr->headers[k].arg1_is_const = 0;
   libafl_cmplog_map_extended_ptr->headers[k].return_addr = RETADDR;
 
   hits &= CMPLOG_MAP_H - 1;
@@ -186,6 +189,7 @@ static inline void cmplog_routines_checked(uintptr_t k, const uint8_t *ptr1,
           len;  // TODO; adjust len for AFL++'s cmplog protocol
     }
   }
+  libafl_cmplog_map_ptr->headers[k].arg1_is_const = 0;
   libafl_cmplog_map_ptr->headers[k].return_addr = RETADDR;
 
   hits &= CMPLOG_MAP_RTN_H - 1;
@@ -215,7 +219,8 @@ static inline void cmplog_routines_checked_extended(uintptr_t      k,
           len;  // TODO; adjust len for AFL++'s cmplog protocol
     }
   }
-  libafl_cmplog_map_extended_ptr->headers[k].return_addr = (uintptr_t)__builtin_return_addr(0);
+  libafl_cmplog_map_ptr->headers[k].arg1_is_const = 0;
+  libafl_cmplog_map_extended_ptr->headers[k].return_addr = RETADDR;
 
   hits &= CMPLOG_MAP_RTN_H - 1;
   libafl_cmplog_map_extended_ptr->vals.routines[k][hits].v0_len = len;

@@ -344,7 +344,7 @@ where
             return Err(Error::empty(String::from("No entries in corpus")));
         }
 
-        let pick_random = state.rand_mut().below(8) == 0;
+        let pick_random = state.rand_mut().below(100) == 0;
         let rand_idx = {
             let corp = state.corpus().count();
             let idx = state.rand_mut().below(corp);

@@ -18,7 +18,7 @@ void __sanitizer_cov_trace_cmp1(uint8_t arg1, uint8_t arg2) {
 #endif
 #ifdef SANCOV_CMPLOG
   k &= CMPLOG_MAP_W - 1;
-  cmplog_instructions_checked(k, 1, (uint64_t)arg1, (uint64_t)arg2);
+  cmplog_instructions_checked(k, 1, (uint64_t)arg1, (uint64_t)arg2, 0);
 #endif
 }
 
@@ -32,7 +32,7 @@ void __sanitizer_cov_trace_cmp2(uint16_t arg1, uint16_t arg2) {
 #endif
 #ifdef SANCOV_CMPLOG
   k &= CMPLOG_MAP_W - 1;
-  cmplog_instructions_checked(k, 2, (uint64_t)arg1, (uint64_t)arg2);
+  cmplog_instructions_checked(k, 2, (uint64_t)arg1, (uint64_t)arg2, 0);
 #endif
 }
 
@@ -46,7 +46,7 @@ void __sanitizer_cov_trace_cmp4(uint32_t arg1, uint32_t arg2) {
 #endif
 #ifdef SANCOV_CMPLOG
   k &= CMPLOG_MAP_W - 1;
-  cmplog_instructions_checked(k, 4, (uint64_t)arg1, (uint64_t)arg2);
+  cmplog_instructions_checked(k, 4, (uint64_t)arg1, (uint64_t)arg2, 0);
 #endif
 }
 
@@ -60,7 +60,7 @@ void __sanitizer_cov_trace_cmp8(uint64_t arg1, uint64_t arg2) {
 #endif
 #ifdef SANCOV_CMPLOG
   k &= CMPLOG_MAP_W - 1;
-  cmplog_instructions_checked(k, 8, (uint64_t)arg1, (uint64_t)arg2);
+  cmplog_instructions_checked(k, 8, (uint64_t)arg1, (uint64_t)arg2, 0);
 #endif
 }
 
@@ -94,25 +94,65 @@ void __sanitizer_cov_trace_switch(uint64_t val, uint64_t *cases) {
 #endif
 #ifdef SANCOV_CMPLOG
     k &= CMPLOG_MAP_W - 1;
-    cmplog_instructions_checked(k, cases[1] / 8, val, cases[i + 2]);
+    cmplog_instructions_checked(k, cases[1] / 8, cases[i + 2], val, 1);
 #endif
   }
 }
 
 void __sanitizer_cov_trace_const_cmp1(uint8_t arg1, uint8_t arg2) {
-  __sanitizer_cov_trace_cmp1(arg1, arg2);
+  uintptr_t k = RETADDR;
+  k = (k >> 4) ^ (k << 8);
+
+#ifdef SANCOV_VALUE_PROFILE
+  k &= CMP_MAP_SIZE - 1;
+  __libafl_targets_value_profile1(k, arg1, arg2);
+#endif
+#ifdef SANCOV_CMPLOG
+  k &= CMPLOG_MAP_W - 1;
+  cmplog_instructions_checked(k, 1, (uint64_t)arg1, (uint64_t)arg2, 1);
+#endif
 }
 
 void __sanitizer_cov_trace_const_cmp2(uint16_t arg1, uint16_t arg2) {
-  __sanitizer_cov_trace_cmp2(arg1, arg2);
+  uintptr_t k = RETADDR;
+  k = (k >> 4) ^ (k << 8);
+
+#ifdef SANCOV_VALUE_PROFILE
+  k &= CMP_MAP_SIZE - 1;
+  __libafl_targets_value_profile2(k, arg1, arg2);
+#endif
+#ifdef SANCOV_CMPLOG
+  k &= CMPLOG_MAP_W - 1;
+  cmplog_instructions_checked(k, 2, (uint64_t)arg1, (uint64_t)arg2, 1);
+#endif
 }
 
 void __sanitizer_cov_trace_const_cmp4(uint32_t arg1, uint32_t arg2) {
-  __sanitizer_cov_trace_cmp4(arg1, arg2);
+  uintptr_t k = RETADDR;
+  k = (k >> 4) ^ (k << 8);
+
+#ifdef SANCOV_VALUE_PROFILE
+  k &= CMP_MAP_SIZE - 1;
+  __libafl_targets_value_profile2(k, arg1, arg2);
+#endif
+#ifdef SANCOV_CMPLOG
+  k &= CMPLOG_MAP_W - 1;
+  cmplog_instructions_checked(k, 4, (uint64_t)arg1, (uint64_t)arg2, 1);
+#endif
 }
 
 void __sanitizer_cov_trace_const_cmp8(uint64_t arg1, uint64_t arg2) {
-  __sanitizer_cov_trace_cmp8(arg1, arg2);
+  uintptr_t k = RETADDR;
+  k = (k >> 4) ^ (k << 8);
+
+#ifdef SANCOV_VALUE_PROFILE
+  k &= CMP_MAP_SIZE - 1;
+  __libafl_targets_value_profile2(k, arg1, arg2);
+#endif
+#ifdef SANCOV_CMPLOG
+  k &= CMPLOG_MAP_W - 1;
+  cmplog_instructions_checked(k, 8, (uint64_t)arg1, (uint64_t)arg2, 1);
+#endif
 }
 
 #pragma GCC diagnostic push

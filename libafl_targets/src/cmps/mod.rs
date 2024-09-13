@@ -73,6 +73,7 @@ pub use libafl_cmplog_enabled as CMPLOG_ENABLED;
 pub struct CmpLogHeader {
     return_addr: usize,
     hits: u16,
+    arg1_is_const: u8,
     shape: u8,
     kind: u8,
 }
@@ -328,6 +329,10 @@ impl CmpMap for CmpLogMap {
         CMPLOG_MAP_W
     }
 
+    fn arg1_is_const_for(&self, idx: usize) -> bool {
+        self.headers[idx].arg1_is_const > 0
+    }
+
     fn cov_map_idx_for(&self, idx: usize) -> usize {
         let ret_addr = self.headers[idx].return_addr;
         unsafe {
@@ -394,6 +399,7 @@ impl CmpMap for CmpLogMap {
         self.headers.fill(CmpLogHeader {
             return_addr: 0,
             hits: 0,
+            arg1_is_const: 0,
             shape: 0,
             kind: 0,
         });
@@ -409,6 +415,7 @@ pub static mut libafl_cmplog_map: CmpLogMap = CmpLogMap {
     headers: [CmpLogHeader {
         return_addr: 0,
         hits: 0,
+        arg1_is_const: 0,
         shape: 0,
         kind: 0,
     }; CMPLOG_MAP_W],
@@ -507,6 +514,10 @@ impl<'de> Deserialize<'de> for AFLppCmpLogMap {
 impl CmpMap for AFLppCmpLogMap {
     fn len(&self) -> usize {
         CMPLOG_MAP_W
+    }
+
+    fn arg1_is_const_for(&self, idx: usize) -> bool {
+        false
     }
 
     fn cov_map_idx_for(&self, _idx: usize) -> usize {
