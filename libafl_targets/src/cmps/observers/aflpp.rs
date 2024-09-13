@@ -260,16 +260,16 @@ impl<'a, S> CmpObserverMetadata<'a, AFLppCmpLogMap, S> for AFLppCmpValuesMetadat
                         if let Some(val) = cmp_map.values_of(i, j) {
                             if let Some(l) = last.and_then(|x| x.to_u64_tuple()) {
                                 if let Some(v) = val.to_u64_tuple() {
-                                    if l.0.wrapping_add(1) == v.0 {
+                                    if l.1.wrapping_add(1) == v.1 {
                                         increasing_v0 += 1;
                                     }
-                                    if l.1.wrapping_add(1) == v.1 {
+                                    if l.2.wrapping_add(1) == v.2 {
                                         increasing_v1 += 1;
                                     }
-                                    if l.0.wrapping_sub(1) == v.0 {
+                                    if l.1.wrapping_sub(1) == v.1 {
                                         decreasing_v0 += 1;
                                     }
-                                    if l.1.wrapping_sub(1) == v.1 {
+                                    if l.2.wrapping_sub(1) == v.2 {
                                         decreasing_v1 += 1;
                                     }
                                 }

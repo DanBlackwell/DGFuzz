@@ -362,21 +362,26 @@ impl CmpMap for CmpLogMap {
 
     fn values_of(&self, idx: usize, execution: usize) -> Option<CmpValues> {
         if self.headers[idx].kind == CMPLOG_KIND_INS {
+            let arg1_is_const = self.headers[idx].arg1_is_const > 0;
             unsafe {
                 match self.headers[idx].shape {
                     1 => Some(CmpValues::U8((
+                        arg1_is_const,
                         self.vals.operands[idx][execution].0 as u8,
                         self.vals.operands[idx][execution].1 as u8,
                     ))),
                     2 => Some(CmpValues::U16((
+                        arg1_is_const,
                         self.vals.operands[idx][execution].0 as u16,
                         self.vals.operands[idx][execution].1 as u16,
                     ))),
                     4 => Some(CmpValues::U32((
+                        arg1_is_const,
                         self.vals.operands[idx][execution].0 as u32,
                         self.vals.operands[idx][execution].1 as u32,
                     ))),
                     8 => Some(CmpValues::U64((
+                        arg1_is_const,
                         self.vals.operands[idx][execution].0,
                         self.vals.operands[idx][execution].1,
                     ))),
@@ -387,6 +392,7 @@ impl CmpMap for CmpLogMap {
         } else {
             unsafe {
                 Some(CmpValues::Bytes((
+                    false,
                     self.vals.routines[idx][execution].0.to_vec(),
                     self.vals.routines[idx][execution].1.to_vec(),
                 )))
@@ -544,21 +550,26 @@ impl CmpMap for AFLppCmpLogMap {
 
     fn values_of(&self, idx: usize, execution: usize) -> Option<CmpValues> {
         if self.headers[idx]._type() == CMPLOG_KIND_INS {
+            let arg1_is_const = false; // TODO: not implemented const check for aflpp
             unsafe {
                 match self.headers[idx].shape() {
                     0 => Some(CmpValues::U8((
+                        false,
                         self.vals.operands[idx][execution].v0 as u8,
                         self.vals.operands[idx][execution].v1 as u8,
                     ))),
                     1 => Some(CmpValues::U16((
+                        false,
                         self.vals.operands[idx][execution].v0 as u16,
                         self.vals.operands[idx][execution].v1 as u16,
                     ))),
                     3 => Some(CmpValues::U32((
+                        false,
                         self.vals.operands[idx][execution].v0 as u32,
                         self.vals.operands[idx][execution].v1 as u32,
                     ))),
                     7 => Some(CmpValues::U64((
+                        false,
                         self.vals.operands[idx][execution].v0,
                         self.vals.operands[idx][execution].v1,
                     ))),
@@ -572,6 +583,7 @@ impl CmpMap for AFLppCmpLogMap {
                 let v0_len = self.vals.fn_operands[idx][execution].v0_len & (0x80 - 1);
                 let v1_len = self.vals.fn_operands[idx][execution].v1_len & (0x80 - 1);
                 Some(CmpValues::Bytes((
+                    false,
                     self.vals.fn_operands[idx][execution].v0[..(v0_len as usize)].to_vec(),
                     self.vals.fn_operands[idx][execution].v1[..(v1_len as usize)].to_vec(),
                 )))

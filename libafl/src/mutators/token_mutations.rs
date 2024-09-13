@@ -556,41 +556,41 @@ where
 
         let mut result = MutationResult::Skipped;
         match cmp_values {
-            CmpValues::U8(v) => {
+            CmpValues::U8((arg1_is_const, s1, s2)) => {
                 for byte in bytes.iter_mut().take(len).skip(off) {
-                    if *byte == v.0 {
-                        *byte = v.1;
+                    if !arg1_is_const && *byte == *s1 {
+                        *byte = *s2;
                         result = MutationResult::Mutated;
                         break;
-                    } else if *byte == v.1 {
-                        *byte = v.0;
+                    } else if *byte == *s2 {
+                        *byte = *s1;
                         result = MutationResult::Mutated;
                         break;
                     }
                 }
             }
-            CmpValues::U16(v) => {
+            CmpValues::U16((arg1_is_const, s1, s2)) => {
                 if len >= size_of::<u16>() {
                     for i in off..=len - size_of::<u16>() {
                         let val =
                             u16::from_ne_bytes(bytes[i..i + size_of::<u16>()].try_into().unwrap());
-                        if val == v.0 {
-                            let new_bytes = v.1.to_ne_bytes();
+                        if !arg1_is_const && val == *s1 {
+                            let new_bytes = s2.to_ne_bytes();
                             bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val.swap_bytes() == v.0 {
-                            let new_bytes = v.1.swap_bytes().to_ne_bytes();
+                        } else if !arg1_is_const && val.swap_bytes() == *s1 {
+                            let new_bytes = s2.swap_bytes().to_ne_bytes();
                             bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val == v.1 {
-                            let new_bytes = v.0.to_ne_bytes();
+                        } else if val == *s2 {
+                            let new_bytes = s1.to_ne_bytes();
                             bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val.swap_bytes() == v.1 {
-                            let new_bytes = v.0.swap_bytes().to_ne_bytes();
+                        } else if val.swap_bytes() == *s2 {
+                            let new_bytes = s1.swap_bytes().to_ne_bytes();
                             bytes[i..i + size_of::<u16>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
@@ -598,28 +598,28 @@ where
                     }
                 }
             }
-            CmpValues::U32(v) => {
+            CmpValues::U32((arg1_is_const, s1, s2)) => {
                 if len >= size_of::<u32>() {
                     for i in off..=len - size_of::<u32>() {
                         let val =
                             u32::from_ne_bytes(bytes[i..i + size_of::<u32>()].try_into().unwrap());
-                        if val == v.0 {
-                            let new_bytes = v.1.to_ne_bytes();
+                        if !arg1_is_const && val == *s1 {
+                            let new_bytes = s2.to_ne_bytes();
                             bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val.swap_bytes() == v.0 {
-                            let new_bytes = v.1.swap_bytes().to_ne_bytes();
+                        } else if !arg1_is_const && val.swap_bytes() == *s1 {
+                            let new_bytes = s2.swap_bytes().to_ne_bytes();
                             bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val == v.1 {
-                            let new_bytes = v.0.to_ne_bytes();
+                        } else if val == *s2 {
+                            let new_bytes = s1.to_ne_bytes();
                             bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val.swap_bytes() == v.1 {
-                            let new_bytes = v.0.swap_bytes().to_ne_bytes();
+                        } else if val.swap_bytes() == *s2 {
+                            let new_bytes = s1.swap_bytes().to_ne_bytes();
                             bytes[i..i + size_of::<u32>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
@@ -627,28 +627,28 @@ where
                     }
                 }
             }
-            CmpValues::U64(v) => {
+            CmpValues::U64((arg1_is_const, s1, s2)) => {
                 if len >= size_of::<u64>() {
                     for i in off..=len - size_of::<u64>() {
                         let val =
                             u64::from_ne_bytes(bytes[i..i + size_of::<u64>()].try_into().unwrap());
-                        if val == v.0 {
-                            let new_bytes = v.1.to_ne_bytes();
+                        if !arg1_is_const && val == *s1 {
+                            let new_bytes = s2.to_ne_bytes();
                             bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val.swap_bytes() == v.0 {
-                            let new_bytes = v.1.swap_bytes().to_ne_bytes();
+                        } else if !arg1_is_const && val.swap_bytes() == *s1 {
+                            let new_bytes = s2.swap_bytes().to_ne_bytes();
                             bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val == v.1 {
-                            let new_bytes = v.0.to_ne_bytes();
+                        } else if val == *s2 {
+                            let new_bytes = s1.to_ne_bytes();
                             bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
-                        } else if val.swap_bytes() == v.1 {
-                            let new_bytes = v.0.swap_bytes().to_ne_bytes();
+                        } else if val.swap_bytes() == *s2 {
+                            let new_bytes = s1.swap_bytes().to_ne_bytes();
                             bytes[i..i + size_of::<u64>()].copy_from_slice(&new_bytes);
                             result = MutationResult::Mutated;
                             break;
@@ -656,24 +656,24 @@ where
                     }
                 }
             }
-            CmpValues::Bytes(v) => {
+            CmpValues::Bytes((arg1_is_const, s1, s2)) => {
                 'outer: for i in off..len {
-                    let mut size = core::cmp::min(v.0.len(), len - i);
-                    while size != 0 {
-                        if v.0.as_slice()[0..size] == input.bytes()[i..i + size] {
+                    let mut size = core::cmp::min(s1.len(), len - i);
+                    while !arg1_is_const && size != 0 {
+                        if s1.as_slice()[0..size] == input.bytes()[i..i + size] {
                             unsafe {
-                                buffer_copy(input.bytes_mut(), v.1.as_slice(), 0, i, size);
+                                buffer_copy(input.bytes_mut(), s2.as_slice(), 0, i, size);
                             }
                             result = MutationResult::Mutated;
                             break 'outer;
                         }
                         size -= 1;
                     }
-                    size = core::cmp::min(v.1.len(), len - i);
+                    size = core::cmp::min(s2.len(), len - i);
                     while size != 0 {
-                        if v.1.as_slice()[0..size] == input.bytes()[i..i + size] {
+                        if s2.as_slice()[0..size] == input.bytes()[i..i + size] {
                             unsafe {
-                                buffer_copy(input.bytes_mut(), v.0.as_slice(), 0, i, size);
+                                buffer_copy(input.bytes_mut(), s1.as_slice(), 0, i, size);
                             }
                             result = MutationResult::Mutated;
                             break 'outer;
@@ -1387,7 +1387,7 @@ where
                             */
                         }
                         (CmpValues::U16(orig), CmpValues::U16(new)) => {
-                            let (orig_v0, orig_v1, new_v0, new_v1) = (orig.0, orig.1, new.0, new.1);
+                            let (orig_v0, orig_v1, new_v0, new_v1) = (orig.1, orig.2, new.1, new.2);
                             let attribute: u8 = header.attribute() as u8;
 
                             if new_v0 != orig_v0 && orig_v0 != orig_v1 {
@@ -1475,7 +1475,7 @@ where
                             */
                         }
                         (CmpValues::U32(orig), CmpValues::U32(new)) => {
-                            let (orig_v0, orig_v1, new_v0, new_v1) = (orig.0, orig.1, new.0, new.1);
+                            let (orig_v0, orig_v1, new_v0, new_v1) = (orig.1, orig.2, new.1, new.2);
                             let attribute = header.attribute() as u8;
 
                             let mut cmp_found = false;
@@ -1568,7 +1568,7 @@ where
                             }
                         }
                         (CmpValues::U64(orig), CmpValues::U64(new)) => {
-                            let (orig_v0, orig_v1, new_v0, new_v1) = (orig.0, orig.1, new.0, new.1);
+                            let (orig_v0, orig_v1, new_v0, new_v1) = (orig.1, orig.2, new.1, new.2);
                             let attribute = header.attribute() as u8;
 
                             let mut cmp_found = false;
@@ -1662,7 +1662,7 @@ where
                         }
                         (CmpValues::Bytes(orig), CmpValues::Bytes(new)) => {
                             let (orig_v0, orig_v1, new_v0, new_v1) =
-                                (&orig.0, &orig.1, &new.0, &new.1);
+                                (&orig.1, &orig.2, &new.1, &new.2);
                             // let attribute = header.attribute() as u8;
                             let mut rtn_found = false;
                             // Compare v0 against v1

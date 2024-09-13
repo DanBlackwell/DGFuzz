@@ -42,16 +42,16 @@ where
 /// Compare values collected during a run
 #[derive(Eq, PartialEq, Debug, Serialize, Deserialize, Clone)]
 pub enum CmpValues {
-    /// Two u8 values
-    U8((u8, u8)),
-    /// Two u16 values
-    U16((u16, u16)),
-    /// Two u32 values
-    U32((u32, u32)),
-    /// Two u64 values
-    U64((u64, u64)),
-    /// Two vecs of u8 values/byte
-    Bytes((Vec<u8>, Vec<u8>)),
+    /// `(arg1_is_const, side1, side2)`
+    U8((bool, u8, u8)),
+    /// `(arg1_is_const, side1, side2)`
+    U16((bool, u16, u16)),
+    /// `(arg1_is_const, side1, side2)`
+    U32((bool, u32, u32)),
+    /// `(arg1_is_const, side1, side2)`
+    U64((bool, u64, u64)),
+    /// `(arg1_is_const, side1, side2)`
+    Bytes((bool, Vec<u8>, Vec<u8>)),
 }
 
 impl CmpValues {
@@ -66,11 +66,11 @@ impl CmpValues {
 
     /// Converts the value to a u64 tuple
     #[must_use]
-    pub fn to_u64_tuple(&self) -> Option<(u64, u64)> {
+    pub fn to_u64_tuple(&self) -> Option<(bool, u64, u64)> {
         match self {
-            CmpValues::U8(t) => Some((u64::from(t.0), u64::from(t.1))),
-            CmpValues::U16(t) => Some((u64::from(t.0), u64::from(t.1))),
-            CmpValues::U32(t) => Some((u64::from(t.0), u64::from(t.1))),
+            CmpValues::U8(t) => Some((t.0, u64::from(t.1), u64::from(t.2))),
+            CmpValues::U16(t) => Some((t.0, u64::from(t.1), u64::from(t.2))),
+            CmpValues::U32(t) => Some((t.0, u64::from(t.1), u64::from(t.2))),
             CmpValues::U64(t) => Some(*t),
             CmpValues::Bytes(_) => None,
         }
@@ -111,7 +111,7 @@ pub struct CmpValuesMetadata {
     pub list: Vec<CmpValues>,
     /// A `HashMap` from prev_edge_idx to list of `CmpValues`
     #[serde(skip)]
-    pub map: HashMap<usize, (bool, Vec<CmpValues>)>,
+    pub map: HashMap<usize, Vec<CmpValues>>,
     /// A `list` of possible DFSan targeted replacements
     #[serde(skip)]
     pub targeted_replacements: Vec<TargetedCmpValReplace>,
@@ -168,21 +168,21 @@ impl CmpValuesMetadata {
                 if covered_blocks.contains(&(bb_cov_map_idx.0 as usize)) { continue; }
                 let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) 
                     else { continue; };
-                let Some((arg1_is_const, cmpvals)) = self.map.get(&(parent.0 as usize)) else { continue; };
+                let Some(cmpvals) = self.map.get(&(parent.0 as usize)) else { continue; };
                 if cmpvals.is_empty() { continue; }
 
                 let mut trimmed_cmps = vec![]; 
                 for cmp_values in cmpvals {
                     // convert to vecs
-                    let (is_num, max_trim, cmp1, cmp2) = match cmp_values {
+                    let (is_num, max_trim, arg1_is_const, cmp1, cmp2) = match cmp_values {
                         // makes no sense to strip u8 or u16s
-                        CmpValues::U8(v)    => (true,  0, vec![v.0], vec![v.1]),
-                        CmpValues::U16(v)   => (true,  0, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::U8((arg1_const, s1, s2))    => (true,  0, arg1_const, vec![*s1], vec![*s2]),
+                        CmpValues::U16((arg1_const, s1, s2))   => (true,  0, arg1_const, s1.to_be_bytes().to_vec(), s2.to_be_bytes().to_vec()),
                         // maybe a 24-bit int stuffed into a 32-bit
-                        CmpValues::U32(v)   => (true,  1, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
+                        CmpValues::U32((arg1_const, s1, s2))   => (true,  1, arg1_const, s1.to_be_bytes().to_vec(), s2.to_be_bytes().to_vec()),
                         // maybe a 40-56-bit int stuffed into a 64-bit
-                        CmpValues::U64(v)   => (true,  3, v.0.to_be_bytes().to_vec(), v.1.to_be_bytes().to_vec()),
-                        CmpValues::Bytes(v) => (false, v.0.len(), v.0.to_owned(), v.1.to_owned())
+                        CmpValues::U64((arg1_const, s1, s2))   => (true,  3, arg1_const, s1.to_be_bytes().to_vec(), s2.to_be_bytes().to_vec()),
+                        CmpValues::Bytes((arg1_const, s1, s2)) => (false, s1.len(), arg1_const, s1.to_owned(), s2.to_owned())
                     };
 
                     // strip leading and trailing zeroes
@@ -204,12 +204,12 @@ impl CmpValuesMetadata {
                     if start > max_trim {
                         start = max_trim;
                     }
-                    trimmed_cmps.push((is_num, cmp1[start..].to_vec(), cmp2[start..].to_vec()));
+                    trimmed_cmps.push((is_num, arg1_is_const, cmp1[start..].to_vec(), cmp2[start..].to_vec()));
                     if cmp1.len() - end > 0 {
                         if cmp1.len() - end > max_trim {
                             end = cmp1.len() - max_trim;
                         }
-                        trimmed_cmps.push((is_num, cmp1[..end].to_vec(), cmp2[..end].to_vec()));
+                        trimmed_cmps.push((is_num, arg1_is_const, cmp1[..end].to_vec(), cmp2[..end].to_vec()));
                     }
                 }
 
@@ -222,7 +222,7 @@ impl CmpValuesMetadata {
                     let expanded_range: Vec<usize> = range.clone().collect();
 
                     // populate a complete list of matches for this cmpval in this edges dependent bytes
-                    for (is_num, cmp1, cmp2) in trimmed_cmps.clone() {
+                    for (is_num, arg1_is_const, cmp1, cmp2) in trimmed_cmps.clone() {
                         // skip boring replacements
                         if cmp1.len() < 1 { continue; }
 
@@ -344,16 +344,16 @@ where
                         if let Some(val) = cmp_map.values_of(i, j) {
                             if let Some(l) = last.and_then(|x| x.to_u64_tuple()) {
                                 if let Some(v) = val.to_u64_tuple() {
-                                    if l.0.wrapping_add(1) == v.0 {
+                                    if l.1.wrapping_add(1) == v.1 {
                                         increasing_v0 += 1;
                                     }
-                                    if l.1.wrapping_add(1) == v.1 {
+                                    if l.2.wrapping_add(1) == v.2 {
                                         increasing_v1 += 1;
                                     }
-                                    if l.0.wrapping_sub(1) == v.0 {
+                                    if l.1.wrapping_sub(1) == v.1 {
                                         decreasing_v0 += 1;
                                     }
-                                    if l.1.wrapping_sub(1) == v.1 {
+                                    if l.2.wrapping_sub(1) == v.2 {
                                         decreasing_v1 += 1;
                                     }
                                 }
@@ -374,8 +374,7 @@ where
 
                 let cov_map_idx = cmp_map.cov_map_idx_for(i);
                 if !self.map.contains_key(&cov_map_idx) {
-                    let arg1_is_const = cmp_map.arg1_is_const_for(i);
-                    self.map.insert(cov_map_idx, (arg1_is_const, vec![]));
+                    self.map.insert(cov_map_idx, vec![]);
                 }
                 let map_vals = self.map
                     .get_mut(&cov_map_idx)
@@ -384,7 +383,7 @@ where
                 for j in 0..execs {
                     if let Some(val) = cmp_map.values_of(i, j) {
                         self.list.push(val.clone());
-                        map_vals.1.push(val);
+                        map_vals.push(val);
                     }
                 }
             }
