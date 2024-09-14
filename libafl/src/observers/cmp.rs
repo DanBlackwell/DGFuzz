@@ -183,9 +183,9 @@ impl CmpValuesMetadata {
             }
             for bb_cov_map_idx in uncovered_bbs {
                 // filter out any globally covered edges
-                if covered_blocks.contains(&(bb_cov_map_idx.0 as usize)) {
-                    continue;
-                }
+                // if covered_blocks.contains(&(bb_cov_map_idx.0 as usize)) {
+                //     continue;
+                // }
                 let Some(parent) = dn_meta.parent_for_uncovered_bb.get(bb_cov_map_idx) else {
                     continue;
                 };

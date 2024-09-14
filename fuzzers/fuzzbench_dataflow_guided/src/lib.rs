@@ -536,7 +536,7 @@ fn fuzz(
         let dataflow = DataflowStage::new(
             &mut state,
             dfsan_binary,
-            5 * timeout,
+            2 * timeout,
             MAP_SIZE,
             cov_map_slice,
             dfsan_labels_slice,

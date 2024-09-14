@@ -457,6 +457,7 @@ impl I2SRandReplace {
         let bytes = input.bytes();
         for (offset, idx) in replacement.input_byte_indexes.iter().enumerate() {
             if bytes[*idx] != replacement.input_byte_values[offset] {
+                // looks like these bytes were already replaced by another CmpLog...
                 return Ok(MutationResult::Skipped);
             }
         }
@@ -509,12 +510,6 @@ impl I2SRandReplace {
             bytes[input_idx] = swap_vec[cmp_idx];
         }
 
-        let cmp_meta = state
-            .metadata_map_mut()
-            .get_mut::<CmpValuesMetadata>()
-            .unwrap();
-        cmp_meta.targeted_replacements.remove(chosen_rep);
-
         Ok(MutationResult::Mutated)
     }
 }
@@ -531,7 +526,7 @@ where
             return Ok(MutationResult::Skipped);
         }
 
-        if state.rand_mut().below(6) == 0 {
+        if state.rand_mut().below(3) == 0 {
             let res = self.targeted_replace(state, input)?;
             // if there were no exact matches fall back to standard cmplog
             if res == MutationResult::Mutated {

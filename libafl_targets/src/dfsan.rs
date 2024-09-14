@@ -24,12 +24,13 @@ use libafl::{
     common::HasMetadata,
     corpus::{Corpus, CorpusId},
     events::{EventFirer, EventRestarter},
-    executors::{Executor, ForkserverExecutor, HasObservers},
+    executors::{Executor, ExitKind, ForkserverExecutor, HasObservers},
     feedbacks::{
         cfg_prescience::ControlFlowGraph, MapIndexesMetadata, MapNeighboursFeedbackMetadata,
     },
     inputs::{BytesInput, HasMutatorBytes, HasTargetBytes, UsesInput},
     mark_feature_time,
+    monitors::PerfFeature,
     mutators::{
         BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator, ByteIncMutator,
         ByteNegMutator, ByteRandMutator, BytesRandSetMutator, DwordAddMutator, MutationResult,
@@ -41,6 +42,7 @@ use libafl::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
     },
+    state::HasClientPerfMonitor,
     start_timer,
     state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState},
     Error, Evaluator, ExecuteInputResult, HasObjective,
@@ -114,7 +116,7 @@ where
     >,
     dfsan_labels_map: OwnedMutSlice<'a, u8>,
     mutations_per_stage: usize,
-    last_new_coverage_time: Option<(usize, std::time::Instant)>,
+    last_df_calc_time: Option<(std::time::Instant, std::time::Duration)>,
     #[allow(clippy::type_complexity)]
     phantom: PhantomData<(E, EM, Z)>,
 }
@@ -166,7 +168,7 @@ where
             executor,
             dfsan_labels_map: dfsan_labels_map_slice,
             mutations_per_stage,
-            last_new_coverage_time: None,
+            last_df_calc_time: None,
             phantom: PhantomData,
         }
     }
@@ -206,9 +208,16 @@ where
             pos += 4;
         }
 
-        self.executor
+        let result = self.executor
             .run_target(fuzzer, state, manager, input)
             .unwrap();
+
+        let mut edges_for_label: HashMap<u8, HashSet<usize>> = HashMap::new();
+
+        if result != ExitKind::Ok {
+            println!("DataflowStage got exit kind: {:?}, bailing!", result);
+            return Ok(edges_for_label);
+        }
 
         // let mut all_edges_for_label: HashMap<u8, Vec<usize>> = HashMap::new();
         // for edge_num in 0..31 {
@@ -226,7 +235,6 @@ where
         // }
         // println!("labels: {:?}, all_edges_for_label: {:?}", labels, all_edges_for_label);
 
-        let mut edges_for_label: HashMap<u8, HashSet<usize>> = HashMap::new();
         for &edge_num in required_edges {
             if buf[edge_num] != 0 {
                 let the_byte = buf[edge_num];
@@ -267,7 +275,11 @@ where
             tc.input().as_ref().unwrap().clone()
         };
 
-        self.executor.run_target(fuzzer, state, manager, &input)?;
+        let res = self.executor.run_target(fuzzer, state, manager, &input)?;
+        if res != ExitKind::Ok {
+            println!("DataflowStage got exit kind: {:?}, bailing!", res);
+            return Ok(HashMap::new());
+        }
 
         fn get_labels_for_range(range: Range<usize>) -> Vec<DFSanLabelInfo> {
             let mut labels = vec![];
@@ -293,7 +305,7 @@ where
             labels
         }
 
-        const MAX_DEPENDENT_BYTES: usize = 100;
+        const MAX_DEPENDENT_BYTES: usize = 256;
         let mut bytes_depended_on_by_edge = {
             let mut tmp = HashMap::new();
             for e in required_edges {
@@ -362,6 +374,11 @@ where
                 &label_infos,
                 &required_edges,
             )?;
+
+            if edges_for_label.is_empty() {
+                return Ok(HashMap::new());
+            }
+
             execs += 1;
             exec_time += start.elapsed();
             let start = std::time::Instant::now();
@@ -991,20 +1008,6 @@ where
             });
         }
 
-        let covered = state
-            .metadata::<MapNeighboursFeedbackMetadata>()
-            .unwrap()
-            .covered_blocks
-            .len();
-        let last_new = self.last_new_coverage_time;
-        if last_new.is_none() || covered > last_new.unwrap().0 {
-            self.last_new_coverage_time = Some((covered, std::time::Instant::now()));
-        }
-
-        let Some((_corpus_id, found_time)) = last_new else {
-            return Ok(());
-        };
-
         if let Some(meta) = state
             .metadata_map_mut()
             .get_mut::<DiscoveriesMutationTypeMetadata>()
@@ -1014,18 +1017,27 @@ where
 
         let num_mutations = 1 + state.rand_mut().below(self.mutations_per_stage);
 
+        start_timer!(state);
+
         let idx = state.corpus().current().unwrap();
         let mut tc = state.corpus().get(idx).unwrap().borrow_mut();
 
-        start_timer!(state);
-
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
-            // The campaign is still going fast, so don't waste time computing DF-dependencies
-            // that may never be used
-            if found_time.elapsed() < std::time::Duration::from_secs(5) {
+            if self.last_df_calc_time.is_some_and(|(recalc_start, duration)| {
+                let now = std::time::Instant::now();
+                // spend no more than 5% of time calcing dependencies
+                now - recalc_start < 20 * duration
+            }) {
+                drop(tc);
+                mark_feature_time!(state, PerfFeature::ComputeDataflowDependencies);
+                #[cfg(feature = "introspection")]
+                state.introspection_monitor_mut().finish_stage();
+
                 return Ok(());
             }
+
+            let start_df_calc = std::time::Instant::now();
 
             let covered_bbs_with_sibs: Vec<usize> = tc
                 .metadata_mut::<TestcaseDirectNeighboursMetadata>()
@@ -1098,6 +1110,8 @@ where
                     global_meta.num_mutations_for_edge.insert(bb, 0);
                 }
             }
+
+            self.last_df_calc_time = Some((start_df_calc, start_df_calc.elapsed()));
         } else {
             drop(tc);
         }
