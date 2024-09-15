@@ -3,6 +3,7 @@
 
 #include "common.h"
 #include <stddef.h>
+#include <stdio.h>
 
 #ifndef CMPLOG_MAP_W
   #define CMPLOG_MAP_W 65536
@@ -102,6 +103,8 @@ extern uint8_t libafl_cmplog_enabled;
 
 extern uint32_t libafl_last_seen_edge_idx;
 
+extern uintptr_t cov_map_idx_containing_address(uintptr_t addr);
+
 // 5 of CMPLOG inner APIs, we static inline everything
 // area_is_valid, cmplog_instructions_checked,
 // cmplog_instructions_extended_checked,
@@ -112,6 +115,8 @@ static inline void cmplog_instructions_checked(uintptr_t k, uint8_t shape,
                                                uint64_t arg1, uint64_t arg2, uint8_t arg1_is_const) {
   if (!libafl_cmplog_enabled) { return; }
   libafl_cmplog_enabled = false;
+
+  k = cov_map_idx_containing_address(RETADDR) & (CMPLOG_MAP_W - 1);
 
   uint16_t hits;
   if (libafl_cmplog_map_ptr->headers[k].kind != CMPLOG_KIND_INS) {
@@ -139,6 +144,8 @@ static inline void cmplog_instructions_extended_checked(
 #ifdef CMPLOG_EXTENDED
   if (!libafl_cmplog_enabled) { return; }
   libafl_cmplog_enabled = false;
+
+  k = cov_map_idx_containing_address(RETADDR) & (CMPLOG_MAP_W - 1);
 
   // printf("%ld %ld %ld\n", k, arg1, arg2);
   uint16_t hits;
@@ -177,6 +184,8 @@ static inline void cmplog_routines_checked(uintptr_t k, const uint8_t *ptr1,
   libafl_cmplog_enabled = false;
   uint32_t hits;
 
+  k = cov_map_idx_containing_address(RETADDR) & (CMPLOG_MAP_W - 1);
+
   if (libafl_cmplog_map_ptr->headers[k].kind != CMPLOG_KIND_RTN) {
     libafl_cmplog_map_ptr->headers[k].kind = CMPLOG_KIND_RTN;
     libafl_cmplog_map_ptr->headers[k].hits = 1;
@@ -205,6 +214,7 @@ static inline void cmplog_routines_checked_extended(uintptr_t      k,
                                                     size_t         len) {
 #ifdef CMPLOG_EXTENDED
   libafl_cmplog_enabled = false;
+  k = cov_map_idx_containing_address(RETADDR) & (CMPLOG_MAP_W - 1);
   uint32_t hits;
   // printf("RTN: %ld %ld %ld %ld\n", k, *ptr1, *ptr2, len);
   if (libafl_cmplog_map_extended_ptr->headers[k].type != CMPLOG_KIND_RTN) {

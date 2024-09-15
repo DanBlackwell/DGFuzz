@@ -352,8 +352,8 @@ impl ControlFlowGraph {
                 // - only one should be used, but we don't know which yet...
                 if let Some(edge_lists) = self.edges_in_func_named.get_mut(&fname) {
                     println!("Found {} sets of definitions for func {fname}, with {:?} BBs and the latest with {} BBs",
-                             edge_lists.len() + 1, 
-                             edge_lists.iter().map(|x| x.len()).collect::<Vec<usize>>(), 
+                             edge_lists.len() + 1,
+                             edge_lists.iter().map(|x| x.len()).collect::<Vec<usize>>(),
                              edges_in_func.len());
                     edge_lists.push(edges_in_func);
                 } else {

@@ -42,8 +42,8 @@ use libafl::{
         mutational::{MutatedTransform, MutatedTransformPost},
         Stage,
     },
-    state::HasClientPerfMonitor,
     start_timer,
+    state::HasClientPerfMonitor,
     state::{HasCorpus, HasExecutions, HasRand, HasSolutions, UsesState},
     Error, Evaluator, ExecuteInputResult, HasObjective,
 };
@@ -208,7 +208,8 @@ where
             pos += 4;
         }
 
-        let result = self.executor
+        let result = self
+            .executor
             .run_target(fuzzer, state, manager, input)
             .unwrap();
 
@@ -1024,11 +1025,14 @@ where
 
         // Compute the metadata if not present
         if tc.metadata::<TestcaseDataflowMetadata>().is_err() {
-            if self.last_df_calc_time.is_some_and(|(recalc_start, duration)| {
-                let now = std::time::Instant::now();
-                // spend no more than 5% of time calcing dependencies
-                now - recalc_start < 20 * duration
-            }) {
+            if self
+                .last_df_calc_time
+                .is_some_and(|(recalc_start, duration)| {
+                    let now = std::time::Instant::now();
+                    // spend no more than 5% of time calcing dependencies
+                    now - recalc_start < 20 * duration
+                })
+            {
                 drop(tc);
                 mark_feature_time!(state, PerfFeature::ComputeDataflowDependencies);
                 #[cfg(feature = "introspection")]

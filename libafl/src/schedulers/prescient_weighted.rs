@@ -219,7 +219,6 @@ where
             }
             time_ordered.push((id, exec_time_ns * len));
         }
-        time_ordered.sort_by(|(_id, score1), (_id2, score2)| score1.partial_cmp(score2).unwrap());
 
         // The more this neighbour has been fuzzed, the less we'll prioritise it (maybe it's hard or infeasible)
         let backoff_weighting_for_direct_neighbour = {
@@ -371,8 +370,8 @@ where
             return Err(Error::empty(String::from("No entries in corpus")));
         }
 
-        // never pick random for now.
-        let pick_random = state.rand_mut().below(10) == 999;
+        // Pick random 5% of the time
+        let pick_random = state.rand_mut().below(20) == 0;
         let rand_idx = {
             let corp = state.corpus().count();
             let idx = state.rand_mut().below(corp);

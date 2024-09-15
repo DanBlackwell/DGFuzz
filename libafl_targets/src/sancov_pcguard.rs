@@ -436,3 +436,13 @@ impl SanCovPcTable {
         }
     }
 }
+    
+#[no_mangle]
+/// Lookup the coverage map index containing a given address (exposed for C)
+pub unsafe fn cov_map_idx_containing_address(address: usize) -> usize {
+    if let Some(entry) = SANCOV_PC_TABLE.as_mut().unwrap().entry_containing_address(address) {
+        entry.cov_map_idx()
+    } else {
+        0
+    }
+}

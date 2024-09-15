@@ -126,6 +126,9 @@ where
             // println!("calibration; corpus.scheduled_count() : {}", corpus.scheduled_count());
 
             if testcase.scheduled_count() > 0 {
+                drop(testcase);
+                #[cfg(feature = "introspection")]
+                state.introspection_monitor_mut().finish_stage();
                 return Ok(());
             }
         }

@@ -210,6 +210,9 @@ where
             .post_exec_all(state, &input, &exit_kind)?;
         mark_feature_time!(state, PerfFeature::PostExecObservers);
 
+        #[cfg(feature = "introspection")]
+        state.introspection_monitor_mut().finish_stage();
+
         Ok(())
     }
 
